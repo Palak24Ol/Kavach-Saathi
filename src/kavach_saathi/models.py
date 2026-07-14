@@ -1,0 +1,292 @@
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from enum import StrEnum
+from typing import Any, Literal
+from uuid import UUID, uuid4
+
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+
+
+def utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+class WorkflowType(StrEnum):
+    LISTING = "listing"
+    SIZE = "size"
+    REVIEW = "review"
+    VOICE = "voice"
+    ADDRESS = "address"
+    CONFIRMATION = "confirmation"
+    RETURN = "return"
+
+
+class RunStatus(StrEnum):
+    QUEUED = "queued"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    NEEDS_EVIDENCE = "needs_evidence"
+    MANUAL_REVIEW = "manual_review"
+    RETRYABLE = "retryable"
+    FAILED = "failed"
+
+
+class AgentName(StrEnum):
+    CATALOGUE_TRUTH = "catalogue_truth"
+    SPEC_ENFORCER = "spec_enforcer"
+    SIZE_TRANSLATOR = "size_translator"
+    REVIEW_FILTER = "review_filter"
+    VOICE_QA = "voice_qa"
+    ADDRESS_GUARDIAN = "address_guardian"
+    DELIVERY_CONFIRMATION = "delivery_confirmation"
+    RETURN_VERIFIER = "return_verifier"
+
+
+class Evidence(BaseModel):
+    key: str
+    value: Any
+    source: str
+    weight: float = Field(default=1.0, ge=0, le=1)
+
+
+class AgentAction(BaseModel):
+    type: str
+    label: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class AgentResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent: AgentName
+    status: RunStatus = RunStatus.COMPLETED
+    confidence: int = Field(ge=0, le=100)
+    summary: str
+    evidence: list[Evidence] = Field(default_factory=list)
+    actions: list[AgentAction] = Field(default_factory=list)
+    data: dict[str, Any] = Field(default_factory=dict)
+    user_message: dict[str, str] = Field(default_factory=dict)
+
+
+class RunEvent(BaseModel):
+    sequence: int
+    timestamp: datetime = Field(default_factory=utc_now)
+    type: str
+    agent: AgentName | None = None
+    message: str
+    data: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunRecord(BaseModel):
+    run_id: UUID = Field(default_factory=uuid4)
+    trace_id: UUID = Field(default_factory=uuid4)
+    workflow: WorkflowType
+    status: RunStatus = RunStatus.QUEUED
+    request: dict[str, Any]
+    results: dict[str, AgentResult] = Field(default_factory=dict)
+    events: list[RunEvent] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    error: str | None = None
+
+
+class SignupRequest(BaseModel):
+    role: Literal["buyer", "seller"]
+    name: str = Field(min_length=1, max_length=120)
+    password: str = Field(min_length=8, max_length=128)
+    preferred_language: str = Field(default="en", min_length=2, max_length=8)
+    email: str | None = None
+    phone: str | None = None
+    business_name: str | None = None
+
+    @model_validator(mode="after")
+    def require_contact(self) -> SignupRequest:
+        if not self.email and not self.phone:
+            raise ValueError("email or phone is required")
+        return self
+
+
+class LoginRequest(BaseModel):
+    identifier: str = Field(min_length=1, description="email or phone")
+    password: str = Field(min_length=1)
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class AuthUser(BaseModel):
+    id: str
+    role: Literal["buyer", "seller", "admin"]
+    name: str
+    email: str | None = None
+    phone: str | None = None
+    preferred_language: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: Literal["bearer"] = "bearer"
+    user: AuthUser
+
+
+class SellerProductCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    brand: str | None = None
+    description: str = ""
+    category: str
+    audience: str = "All"
+    occasion: str | None = None
+    material: str | None = None
+    price: float = Field(gt=0)
+    original_price: float = Field(gt=0)
+    image_keys: list[str] = Field(min_length=1, max_length=5)
+    seller_specs: dict[str, Any] = Field(default_factory=dict)
+
+
+class SellerProductUpdate(BaseModel):
+    price: float | None = Field(default=None, gt=0)
+    status: Literal["draft", "pending_seller_input", "active", "blocked"] | None = None
+
+
+class SellerVariantCreate(BaseModel):
+    size: str = Field(min_length=1, max_length=16)
+    stock_qty: int = Field(ge=0)
+    price: float | None = Field(default=None, gt=0)
+
+
+class SellerOrderStatusUpdate(BaseModel):
+    status: Literal["PACKED", "SHIPPED"]
+
+
+class KYCStartResponse(BaseModel):
+    authorize_url: str | None
+    configured: bool
+    status: str
+
+
+class KYCCompleteRequest(BaseModel):
+    code: str
+    redirect_uri: str
+
+
+class Coordinates(BaseModel):
+    latitude: float = Field(ge=2.5, le=38.5)
+    longitude: float = Field(ge=66.0, le=99.0)
+
+
+class ListingAnalyzeRequest(BaseModel):
+    seller_id: str
+    product_id: str
+    image_keys: list[str] = Field(min_length=1, max_length=5)
+    seller_specs: dict[str, Any]
+    idempotency_key: str | None = None
+
+
+class SizeRecommendRequest(BaseModel):
+    buyer_id: str
+    product_id: str
+    idempotency_key: str | None = None
+
+
+class ReviewAnalyzeRequest(BaseModel):
+    review_id: str
+    product_id: str
+    image_key: str | None = None
+    idempotency_key: str | None = None
+
+
+class VoiceQueryRequest(BaseModel):
+    buyer_id: str
+    product_id: str
+    compare_product_ids: list[str] = Field(default_factory=list, max_length=4)
+    text: str | None = None
+    audio_key: str | None = None
+    language: str = "hi"
+    idempotency_key: str | None = None
+
+    @model_validator(mode="after")
+    def require_text_or_audio(self) -> VoiceQueryRequest:
+        if not self.text and not self.audio_key:
+            raise ValueError("Either text or audio_key is required")
+        return self
+
+
+class AddressVerifyRequest(BaseModel):
+    buyer_id: str
+    raw_address: str
+    postal_pin: str = Field(pattern=r"^\d{6}$")
+    coordinates: Coordinates
+    idempotency_key: str | None = None
+
+
+class ConfirmationRequest(BaseModel):
+    decision: Literal["confirmed", "reschedule", "cancel", "update_address"]
+    scheduled_date: str | None = None
+    updated_address: AddressVerifyRequest | None = None
+    idempotency_key: str | None = None
+
+
+class ReturnAnalyzeRequest(BaseModel):
+    order_id: str
+    video_key: str
+    additional_image_keys: list[str] = Field(default_factory=list, max_length=5)
+    idempotency_key: str | None = None
+
+
+class CartItemAdd(BaseModel):
+    product_variant_id: str
+    qty: int = Field(default=1, ge=1, le=20)
+
+
+class CartItemUpdate(BaseModel):
+    qty: int = Field(ge=1, le=20)
+
+
+class OrderCreateRequest(BaseModel):
+    address_id: str
+    payment_mode: Literal["cod", "prepaid"]
+
+
+class PaymentVerifyRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+class ReviewCreateRequest(BaseModel):
+    product_id: str
+    order_id: str | None = None
+    rating: int = Field(ge=1, le=5)
+    text: str = Field(default="", max_length=2000)
+    image_key: str | None = None
+
+
+class PresignRequest(BaseModel):
+    kind: Literal["catalogue", "review", "voice", "return"]
+    filename: str
+    content_type: str
+
+
+class PresignResponse(BaseModel):
+    object_key: str
+    upload_url: HttpUrl | str
+    expires_in: int
+
+
+class RunEnvelope(BaseModel):
+    run_id: UUID
+    trace_id: UUID
+    workflow: WorkflowType
+    status: RunStatus
+    results: dict[str, AgentResult]
+    error: str | None = None
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok", "degraded"]
+    mode: Literal["demo", "live"]
+    agents: int = 8
+    checks: dict[str, bool | int | str]
