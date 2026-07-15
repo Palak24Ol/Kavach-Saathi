@@ -84,6 +84,11 @@ def _product_dict(product: Product) -> dict[str, Any]:
         "size_chart": product.size_chart,
         "return_window_days": product.return_window_days,
         "media": {"primary": product.media_primary, "care_label": product.media_care_label},
+        "product_images": product.product_images,
+        "catalogue_images": product.catalogue_images,
+        "extraction_results": product.extraction_results,
+        "seller_corrections": product.seller_corrections,
+        "activation_timestamp": product.activation_timestamp.isoformat() if product.activation_timestamp else None,
     }
 
 
@@ -563,7 +568,9 @@ class CommerceRepository:
         with no real return data to compute from.
         """
         import uuid
-        from datetime import UTC, datetime
+        from datetime import UTC, datetime, timedelta
+        from kavach_saathi.order_status import OrderStatus
+        from kavach_saathi.db.models import OrderStatusHistory, OrderItem
 
         with self._session() as session:
             record = session.execute(select(ReturnRecord).where(ReturnRecord.order_id == order_id)).scalars().first()
@@ -573,12 +580,93 @@ class CommerceRepository:
             record.buyer_id = buyer_id
             record.video_url = video_key
             record.confidence_score = confidence_score
+            
+            order = session.get(Order, order_id)
+            
+            # Use finalize_return_record_decision logic
             record.decision = decision
             record.decided_at = datetime.now(UTC)
 
-            order = session.get(Order, order_id)
             if order:
                 order.return_outcome = decision
+
+            if decision == "approve":
+                record.status = "pickup_scheduled"
+                if order:
+                    order.status = OrderStatus.RETURN_APPROVED
+                    session.add(OrderStatusHistory(order_id=order.id, status=OrderStatus.RETURN_APPROVED, actor="system"))
+                
+                record.pickup_date = datetime.now(UTC) + timedelta(days=3)
+                record.pickup_status = "scheduled"
+
+                if record.return_type == "exchange":
+                    if not record.replacement_order_id:
+                        replacement_id = f"O-EXCH-{uuid.uuid4().hex[:10].upper()}"
+                        orig_items = session.query(OrderItem).filter(OrderItem.order_id == record.order_id).all()
+                        replacement_order = Order(
+                            id=replacement_id,
+                            buyer_id=record.buyer_id,
+                            address_id=order.address_id if order else None,
+                            status=OrderStatus.CONFIRMED,
+                            total_amount=0.0,
+                            payment_mode=order.payment_mode if order else "cod",
+                            exchange_tag=True,
+                            original_order_id=record.order_id,
+                            stock_decremented=False,
+                        )
+                        session.add(replacement_order)
+                        session.flush()
+
+                        for orig_item in orig_items:
+                            rep_item = OrderItem(
+                                order_id=replacement_id,
+                                product_id=orig_item.product_id,
+                                product_variant_id=orig_item.product_variant_id,
+                                seller_id=orig_item.seller_id,
+                                size=orig_item.size,
+                                qty=orig_item.qty,
+                                price_at_purchase=0.0,
+                            )
+                            session.add(rep_item)
+                        
+                        record.replacement_order_id = replacement_id
+                        session.add(OrderStatusHistory(order_id=replacement_id, status=OrderStatus.PLACED, actor="system"))
+                        session.add(OrderStatusHistory(order_id=replacement_id, status=OrderStatus.CONFIRMED, actor="system"))
+                        session.flush()
+
+                elif record.return_type == "refund":
+                    record.refund_status = "processing"
+                    if order and order.payment_mode == "prepaid":
+                        record.refund_masked_details = "Original Payment Method (Razorpay)"
+                    else:
+                        record.refund_masked_details = "Bank A/C: ******5678 (SBI)"
+
+            elif decision == "manual_inspection":
+                record.status = "manual_inspection"
+                if order:
+                    order.status = OrderStatus.MANUAL_INSPECTION
+                    session.add(OrderStatusHistory(order_id=order.id, status=OrderStatus.MANUAL_INSPECTION, actor="system"))
+                    
+            elif decision == "reject":
+                record.status = "rejected"
+                if order:
+                    order.status = OrderStatus.RETURN_REJECTED
+                    session.add(OrderStatusHistory(order_id=order.id, status=OrderStatus.RETURN_REJECTED, actor="system"))
+
+            elif decision == "request_more_evidence":
+                record.status = "needs_evidence"
+                if order:
+                    order.status = OrderStatus.RETURN_UNDER_REVIEW
+                    session.add(OrderStatusHistory(order_id=order.id, status=OrderStatus.RETURN_UNDER_REVIEW, actor="system"))
+
+            timeline = list(record.status_timeline or [])
+            timeline.append({
+                "status": record.status,
+                "timestamp": datetime.now(UTC).isoformat(),
+                "notes": f"Decision: {decision}"
+            })
+            record.status_timeline = timeline
+            
             session.commit()
             return record.id
 

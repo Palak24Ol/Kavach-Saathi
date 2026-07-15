@@ -295,6 +295,26 @@ def create_app() -> FastAPI:
         container: Container = Depends(get_container),
     ):
         products = container.repository.list("products")
+        # Filter out non-active products
+        products = [product for product in products if product.get("status") == "active"]
+
+        # Sort by activation_timestamp descending
+        from datetime import datetime, UTC
+        min_dt = datetime.min.replace(tzinfo=UTC)
+
+        def get_activation_time(p):
+            ts = p.get("activation_timestamp")
+            if not ts:
+                return min_dt
+            if isinstance(ts, str):
+                try:
+                    return datetime.fromisoformat(ts)
+                except ValueError:
+                    return min_dt
+            return ts
+
+        products.sort(key=get_activation_time, reverse=True)
+
         if q:
             term = q.casefold()
             products = [
@@ -319,7 +339,7 @@ def create_app() -> FastAPI:
             "categories": [
                 item
                 for item in STOREFRONT_CATEGORIES
-                if any(product["category"] == item for product in container.repository.list("products"))
+                if any(product["category"] == item for product in container.repository.list("products") if product.get("status") == "active")
             ],
         }
 
@@ -331,6 +351,63 @@ def create_app() -> FastAPI:
         result["reviews"] = container.repository.product_reviews(product_id)
         result["review_report"] = container.repository.review_report(product_id)
         return result
+
+    @app.get(f"{prefix}/storefront/products/{{product_id}}/similar")
+    async def similar_products(product_id: str, container: Container = Depends(get_container)):
+        """Returns up to 8 active and in-stock products in the same category (excluding current),
+        with comparable price range (+-20%) and sorted by spec overlap and activation_timestamp DESC."""
+        from datetime import datetime, UTC as _UTC
+        product = container.repository.get("products", product_id)
+        if not product:
+            raise HTTPException(status_code=404, detail="Product not found")
+
+        product_price = product.get("price", 0.0)
+        product_category = product.get("category")
+        product_specs = product.get("specs", {})
+
+        all_products = container.repository.list("products")
+        candidates = []
+        for p in all_products:
+            if p.get("id") == product_id:
+                continue
+            if p.get("status") != "active":
+                continue
+            if p.get("stock", 0) <= 0:
+                continue
+            if p.get("category") != product_category:
+                continue
+            
+            price = p.get("price", 0.0)
+            # Price must be within 20% range
+            if abs(price - product_price) > 0.2 * product_price:
+                continue
+                
+            candidates.append(p)
+
+        def get_similarity_score(p):
+            p_specs = p.get("specs", {})
+            score = 0
+            for key, val in product_specs.items():
+                if key in p_specs and p_specs[key] == val:
+                    score += 1
+            return score
+
+        _min_dt = datetime.min.replace(tzinfo=_UTC)
+
+        def _activation_ts(p):
+            ts = p.get("activation_timestamp")
+            if not ts:
+                return _min_dt
+            if isinstance(ts, str):
+                try:
+                    return datetime.fromisoformat(ts)
+                except ValueError:
+                    return _min_dt
+            return ts
+
+        candidates.sort(key=lambda p: (get_similarity_score(p), _activation_ts(p)), reverse=True)
+        return {"items": [storefront_product(p, container) for p in candidates[:8]]}
+
 
     @app.get(f"{prefix}/storefront/demo-context")
     async def storefront_demo_context(container: Container = Depends(get_container)):

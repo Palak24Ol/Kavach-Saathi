@@ -33,6 +33,11 @@ import {
   X,
   Edit2,
   Trash2,
+  Video,
+  FileVideo,
+  AlertTriangle,
+  Calendar,
+  RefreshCw,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -192,7 +197,7 @@ function TrustDock({ trust, busy, onClose, onRunAll }) {
   );
 }
 
-function ProductPageView({ product, busy, cart, cartBusy, onBack, onClose, onAdd, onUpdateCart, onOpenCart, onWishlist, wished, onSize, onReview, onAsk, onAskVoice, voiceAudioUrl, agentAnswer, sizeSaathi, onSubmitReview }) {
+function ProductPageView({ product, busy, cart, cartBusy, onBack, onClose, onAdd, onUpdateCart, onOpenCart, onWishlist, wished, onSize, onReview, onAsk, onAskVoice, voiceAudioUrl, agentAnswer, sizeSaathi }) {
   const [size, setSize] = useState("M");
 
   useEffect(() => {
@@ -202,9 +207,6 @@ function ProductPageView({ product, busy, cart, cartBusy, onBack, onClose, onAdd
     if (sizeSaathi?.size) setSize(sizeSaathi.size);
   }, [sizeSaathi?.size]);
   const [question, setQuestion] = useState("Iska fabric aur return policy batao");
-  const [reviewRating, setReviewRating] = useState(5);
-  const [reviewText, setReviewText] = useState("");
-  const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [recording, setRecording] = useState(false);
   const [requestingMic, setRequestingMic] = useState(false);
   const mediaRecorderRef = useRef(null);
@@ -324,25 +326,6 @@ function ProductPageView({ product, busy, cart, cartBusy, onBack, onClose, onAdd
             {voiceAudioUrl && <audio controls src={voiceAudioUrl} style={{ width: "100%", marginTop: 8 }} />}
           </form>
 
-          <form
-            className="ask-saathi"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              setReviewSubmitting(true);
-              try {
-                await onSubmitReview(product.id, reviewRating, reviewText);
-                setReviewText("");
-              } finally {
-                setReviewSubmitting(false);
-              }
-            }}
-          >
-            <label><MessageCircle size={15} /> Write a review</label>
-            <div className="size-row">{[1, 2, 3, 4, 5].map((value) => <button type="button" key={value} className={reviewRating === value ? "selected" : ""} onClick={() => setReviewRating(value)}>{value}<Star size={11} fill="currentColor" /></button>)}</div>
-            <div><input value={reviewText} onChange={(event) => setReviewText(event.target.value)} placeholder="Kaisa laga yeh product?" /><button type="submit" disabled={reviewSubmitting}>{reviewSubmitting ? <LoaderCircle className="spin" size={15} /> : "Post"}</button></div>
-            <small>Agent 4 (CLIP + BERT) automatically checks new reviews for relevance in the background.</small>
-          </form>
-
           {!!product.reviews?.length && (
             <div className="review-list">
               <div className="review-list-header">
@@ -392,8 +375,32 @@ function ProductPageView({ product, busy, cart, cartBusy, onBack, onClose, onAdd
               </div>
             </div>
           )}
+          
+          {!!similarProducts?.length && (
+            <section className="similar-products">
+              <label>Similar products verified by Saathi</label>
+              <div className="product-grid">
+                {similarProducts.map((p) => (
+                  <button type="button" key={p.id} className="product-card" onClick={() => onOpenProduct(p.id)}>
+                    <img src={assetUrl(p.image_url)} alt={p.name} />
+                    <strong>{p.name}</strong>
+                    <span>{money(p.price)}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
       </main>
+
+      {/* Site footer on product pages (Task 12) */}
+      <footer className="site-footer" style={{ marginTop: "0" }}>
+        <Link className="logo inverse" href="/"><span>K</span><div><strong>Kavach</strong><small>SAATHI SHOP</small></div></Link>
+        <p>Every product, review and return is agent-verified — no fake shortcuts.</p>
+        <div>
+          <Link href="/" style={{ color: "inherit", textDecoration: "none" }}>← Back to storefront</Link>
+        </div>
+      </footer>
     </div>
   );
 }
@@ -462,15 +469,377 @@ function CartDrawer({ items, open, busyItem, onClose, onUpdate, onRemove, onChec
   );
 }
 
-function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onOpenProduct, onRemoveWishlist, onStartReturn }) {
+function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onOpenProduct, onRemoveWishlist, onStartReturn, onStartReview, onViewReturn }) {
   const title = type === "orders" ? "My Orders" : type === "wishlist" ? "My Wishlist" : "My Returns";
   const items = type === "orders" ? orders : type === "wishlist" ? wishlist : returns;
-  return <div className={`drawer-layer ${open ? "open" : ""}`} aria-hidden={!open}><button className="drawer-scrim" type="button" onClick={onClose} aria-label={`Close ${title}`} /><aside className="side-drawer account-data-drawer" role="dialog" aria-modal="true" aria-label={title}><div className="side-heading"><div><p>YOUR ACCOUNT</p><h2>{title}</h2></div><button type="button" onClick={onClose} aria-label="Close"><X size={20} /></button></div><div className="account-data-list">
-    {!items.length && <div className="cart-empty"><Package size={34} /><p>No {title.toLowerCase()} yet.</p></div>}
-    {type === "orders" && orders.map((order) => <article className="account-record" key={order.id}><div><strong>{order.id}</strong><span>{order.status}</span></div><p>{new Date(order.created_at).toLocaleDateString("en-IN")} · {money(order.total_amount)} · {order.payment_mode?.toUpperCase()}</p>{order.items.map((item) => <button type="button" key={`${order.id}-${item.product_id}`} onClick={() => onOpenProduct(item.product_id)}><img src={assetUrl(item.image_url)} alt="" /><span>{item.product_name}<small>Size {item.size || "Standard"} · Qty {item.qty}</small></span></button>)}{order.status === "DELIVERED" ? <button className="secondary-cta" type="button" onClick={() => onStartReturn(order.id)}>Request return</button> : <small>Return becomes available after delivery.</small>}</article>)}
-    {type === "wishlist" && wishlist.map((item) => <article className="account-record wishlist-record" key={item.id}><button type="button" onClick={() => onOpenProduct(item.product.id)}><img src={assetUrl(item.product.image_url)} alt="" /><span><strong>{item.product.name}</strong><small>{money(item.product.price)} · {item.product.stock} available</small></span></button><button className="secondary-cta" type="button" onClick={() => onRemoveWishlist(item.product.id)}>Remove</button></article>)}
-    {type === "returns" && returns.map((item) => <article className="account-record" key={item.id}><div><strong>{item.id}</strong><span>{item.status}</span></div><p>Order {item.order_id}</p><p>{item.reason}</p>{item.confidence_score != null && <small>Agent confidence: {item.confidence_score}%</small>}</article>)}
-  </div></aside></div>;
+
+  function statusColor(s) {
+    if (["DELIVERED", "RETURN_APPROVED", "CLOSED"].includes(s)) return "#16a34a";
+    if (["RETURN_INITIATED", "RETURN_UNDER_REVIEW", "MANUAL_INSPECTION"].includes(s)) return "#d97706";
+    if (["CANCELLED", "RETURN_REJECTED"].includes(s)) return "#e5484d";
+    return "#6366f1";
+  }
+
+  return (
+    <div className={`drawer-layer ${open ? "open" : ""}`} aria-hidden={!open}>
+      <button className="drawer-scrim" type="button" onClick={onClose} aria-label={`Close ${title}`} />
+      <aside className="side-drawer account-data-drawer" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="side-heading">
+          <div><p>YOUR ACCOUNT</p><h2>{title}</h2></div>
+          <button type="button" onClick={onClose} aria-label="Close"><X size={20} /></button>
+        </div>
+        <div className="account-data-list">
+          {!items.length && <div className="cart-empty"><Package size={34} /><p>No {title.toLowerCase()} yet.</p></div>}
+
+          {type === "orders" && orders.map((order) => (
+            <article className="account-record" key={order.id} style={{ borderLeft: `3px solid ${statusColor(order.status)}`, paddingLeft: "12px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px" }}>
+                <div>
+                  <strong style={{ fontSize: "14px" }}>{order.id}</strong>
+                  {order.exchange_tag && <span style={{ marginLeft: "6px", background: "#ede9fe", color: "#7c3aed", padding: "1px 6px", borderRadius: "4px", fontSize: "11px", fontWeight: "600" }}>EXCHANGE</span>}
+                </div>
+                <span style={{ fontSize: "11px", fontWeight: "600", color: statusColor(order.status), background: "#f8fafc", padding: "2px 8px", borderRadius: "4px" }}>{order.status}</span>
+              </div>
+              <p style={{ margin: "0 0 8px", color: "#64748b", fontSize: "13px" }}>
+                {new Date(order.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })} · {money(order.total_amount)} · {order.payment_mode?.toUpperCase()}
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginBottom: "10px" }}>
+                {order.items.map((item) => (
+                  <button type="button" key={`${order.id}-${item.product_id}`} onClick={() => onOpenProduct(item.product_id)} style={{ display: "flex", alignItems: "center", gap: "10px", background: "#f8fafc", border: "1px solid var(--border)", borderRadius: "6px", padding: "8px", cursor: "pointer", textAlign: "left", width: "100%" }}>
+                    <img src={assetUrl(item.image_url)} alt="" style={{ width: "40px", height: "40px", objectFit: "cover", borderRadius: "4px", flexShrink: 0 }} />
+                    <span style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ display: "block", fontWeight: "600", fontSize: "13px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.product_name}</span>
+                      <small style={{ color: "#64748b" }}>Size {item.size || "Standard"} · Qty {item.qty}</small>
+                    </span>
+                    {item.already_reviewed && <span style={{ fontSize: "11px", color: "#16a34a", flexShrink: 0 }}>✓ Reviewed</span>}
+                  </button>
+                ))}
+              </div>
+              {order.return_info && (
+                <div style={{ background: "#fef9f0", border: "1px solid #fde68a", borderRadius: "6px", padding: "8px 10px", marginBottom: "8px", fontSize: "13px" }}>
+                  <span style={{ fontWeight: "600", color: "#92400e" }}>{order.return_info.return_type === "exchange" ? "Exchange" : "Return"}</span>
+                  {" — "}
+                  <span style={{ color: "#78350f", textTransform: "capitalize" }}>{(order.return_info.status || "").replace(/_/g, " ")}</span>
+                  {order.return_info.decision && <span style={{ marginLeft: "4px", color: "#64748b" }}>· {order.return_info.decision}</span>}
+                  {order.return_info.confidence_score != null && <span style={{ marginLeft: "4px", color: "#64748b" }}>· Agent: {order.return_info.confidence_score}%</span>}
+                  {order.return_info.pickup_date && <div style={{ color: "#64748b", marginTop: "2px" }}>Pickup: {new Date(order.return_info.pickup_date).toLocaleDateString("en-IN")}</div>}
+                  {order.return_info.refund_status && <div style={{ color: "#64748b", marginTop: "2px" }}>Refund: {order.return_info.refund_status}</div>}
+                  <button 
+                    type="button" 
+                    className="secondary-cta compact" 
+                    style={{ marginTop: "6px", width: "100%", fontSize: "11px", padding: "4px 8px" }}
+                    onClick={() => onViewReturn(order.return_info.id)}
+                  >
+                    View Status &amp; Verification Page
+                  </button>
+                </div>
+              )}
+              <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                {order.status === "DELIVERED" && !order.return_info && (
+                  <>
+                    <button className="secondary-cta" type="button" style={{ flex: 1 }} onClick={() => onStartReturn(order.id, "refund")}><RotateCcw size={13} /> Return</button>
+                    <button className="secondary-cta" type="button" style={{ flex: 1 }} onClick={() => onStartReturn(order.id, "exchange")}><ArrowRight size={13} /> Exchange</button>
+                  </>
+                )}
+                {order.status === "DELIVERED" && order.items.some((i) => !i.already_reviewed) && (
+                  <button className="secondary-cta" type="button" style={{ flex: 1 }} onClick={() => { const u = order.items.find((i) => !i.already_reviewed); if (u) onStartReview(u.product_id, order.id); }}><Star size={13} /> Rate &amp; Review</button>
+                )}
+                {!["DELIVERED", "RETURN_INITIATED", "RETURN_UNDER_REVIEW", "MANUAL_INSPECTION", "RETURN_APPROVED", "CLOSED", "CANCELLED"].includes(order.status) && (
+                  <small style={{ color: "#94a3b8", fontSize: "12px" }}>Return available after delivery</small>
+                )}
+              </div>
+            </article>
+          ))}
+
+          {type === "wishlist" && wishlist.map((item) => (
+            <article className="account-record wishlist-record" key={item.id}>
+              <button type="button" onClick={() => onOpenProduct(item.product.id)}>
+                <img src={assetUrl(item.product.image_url)} alt="" />
+                <span><strong>{item.product.name}</strong><small>{money(item.product.price)} · {item.product.stock} available</small></span>
+              </button>
+              <button className="secondary-cta" type="button" onClick={() => onRemoveWishlist(item.product.id)}>Remove</button>
+            </article>
+          ))}
+
+          {type === "returns" && returns.map((item) => (
+            <article className="account-record" key={item.id} style={{ borderLeft: `3px solid ${item.decision === "approve" ? "#16a34a" : item.decision === "manual_inspection" ? "#d97706" : "#6366f1"}`, paddingLeft: "12px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "4px" }}>
+                <strong style={{ fontSize: "14px" }}>{item.id}</strong>
+                <span style={{ fontSize: "11px", background: "#f1f5f9", padding: "2px 6px", borderRadius: "4px", color: "#475569" }}>{(item.return_type || "refund").toUpperCase()}</span>
+              </div>
+              <p style={{ margin: "0 0 4px", color: "#64748b", fontSize: "13px" }}>Order {item.order_id}</p>
+              <p style={{ margin: "0 0 6px", fontSize: "13px" }}>{item.reason}</p>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", fontSize: "12px", color: "#64748b" }}>
+                <span>Status: <strong style={{ color: "#334155" }}>{(item.status || "pending_evidence").replace(/_/g, " ")}</strong></span>
+                {item.decision && <span>· Decision: <strong style={{ color: "#334155" }}>{item.decision.replace(/_/g, " ")}</strong></span>}
+                {item.confidence_score != null && <span>· Agent: <strong style={{ color: "#334155" }}>{item.confidence_score}%</strong></span>}
+              </div>
+              {item.pickup_date && <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#16a34a" }}>Pickup: {new Date(item.pickup_date).toLocaleDateString("en-IN")}</p>}
+              {item.refund_status && <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#6366f1" }}>Refund: {item.refund_status}</p>}
+              {item.replacement_order_id && <p style={{ margin: "4px 0 0", fontSize: "12px", color: "#7c3aed" }}>Replacement: {item.replacement_order_id}</p>}
+              <button 
+                type="button" 
+                className="secondary-cta compact" 
+                style={{ marginTop: "10px", width: "100%", fontSize: "12px" }}
+                onClick={() => onViewReturn(item.id)}
+              >
+                {item.status === "pending_evidence" || item.status === "needs_evidence" ? "Upload Return Evidence" : "View AI Analysis & Status"}
+              </button>
+            </article>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function ReturnVerificationDrawer({ open, returnId, returns, orders, onClose, onRefreshData }) {
+  const [videoFile, setVideoFile] = useState(null);
+  const [videoPreviewUrl, setVideoPreviewUrl] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [statusText, setStatusText] = useState("");
+  const [recording, setRecording] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(10);
+  const [mediaStream, setMediaStream] = useState(null);
+  const [mediaRecorder, setMediaRecorder] = useState(null);
+  
+  const videoPreviewRef = useRef(null);
+  const recordedChunksRef = useRef([]);
+
+  const record = returns.find((r) => r.id === returnId);
+  const order = record ? orders.find((o) => o.id === record.order_id) : null;
+
+  useEffect(() => {
+    return () => {
+      if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
+    };
+  }, [videoPreviewUrl]);
+
+  if (!open || !record) return null;
+
+  async function startRecording() {
+    recordedChunksRef.current = [];
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      setMediaStream(stream);
+      if (videoPreviewRef.current) {
+        videoPreviewRef.current.srcObject = stream;
+      }
+      const recorder = new MediaRecorder(stream, { mimeType: "video/webm" });
+      setMediaRecorder(recorder);
+      
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          recordedChunksRef.current.push(e.data);
+        }
+      };
+
+      recorder.onstop = () => {
+        const blob = new Blob(recordedChunksRef.current, { type: "video/mp4" });
+        const file = new File([blob], "return-video.mp4", { type: "video/mp4" });
+        setVideoFile(file);
+        setVideoPreviewUrl(URL.createObjectURL(blob));
+        
+        stream.getTracks().forEach((track) => track.stop());
+        setMediaStream(null);
+        setRecording(false);
+      };
+
+      recorder.start();
+      setRecording(true);
+      setRecordingSeconds(10);
+
+      const interval = setInterval(() => {
+        setRecordingSeconds((prev) => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            recorder.stop();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+
+    } catch (err) {
+      alert("Could not access camera: " + err.message);
+    }
+  }
+
+  function stopRecording() {
+    if (mediaRecorder && mediaRecorder.state !== "inactive") {
+      mediaRecorder.stop();
+    }
+    if (mediaStream) {
+      mediaStream.getTracks().forEach((track) => track.stop());
+      setMediaStream(null);
+    }
+    setRecording(false);
+  }
+
+  function handleFileSelect(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("video/")) {
+      alert("Please select a valid video file.");
+      return;
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      alert("File is too large. Please select a video under 50MB.");
+      return;
+    }
+    setVideoFile(file);
+    setVideoPreviewUrl(URL.createObjectURL(file));
+  }
+
+  async function handleSubmitEvidence() {
+    if (!videoFile) return;
+    setUploading(true);
+    setStatusText("Obtaining upload slot...");
+    try {
+      const presignData = await post("/uploads/presign", {
+        filename: videoFile.name || "video.mp4",
+        kind: "return"
+      });
+
+      setStatusText("Uploading video to secure storage...");
+      const response = await fetch(presignData.upload_url, {
+        method: "PUT",
+        headers: {
+          "Content-Type": videoFile.type || "video/mp4"
+        },
+        body: videoFile
+      });
+
+      if (!response.ok) {
+        throw new Error(`Upload failed with status ${response.status}`);
+      }
+
+      setStatusText("Agent 8 is evaluating return evidence...");
+      await postAndPoll("/returns/analyze", {
+        order_id: record.order_id,
+        video_key: presignData.object_key,
+        additional_image_keys: []
+      });
+
+      setStatusText("Analysis complete!");
+      setTimeout(() => {
+        setUploading(false);
+        onRefreshData();
+      }, 1500);
+
+    } catch (err) {
+      alert("Failed to verify return: " + err.message);
+      setUploading(false);
+      setStatusText("");
+    }
+  }
+
+  return (
+    <div className="drawer-layer open" style={{ zIndex: 100 }}>
+      <button className="drawer-scrim" type="button" onClick={onClose} aria-label="Close Return Verification" />
+      <aside className="side-drawer" role="dialog" aria-modal="true" style={{ width: "min(600px, 100vw)", padding: "24px", display: "flex", flexDirection: "column", gap: "20px", overflowY: "auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <p style={{ margin: 0, fontSize: "11px", fontWeight: "bold", color: "var(--plum)" }}>AI RETURN VERIFICATION</p>
+            <h2 style={{ margin: 0, fontFamily: "Georgia, serif", fontSize: "20px" }}>Request ID: {record.id}</h2>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Close" style={{ background: "none", border: "none", cursor: "pointer" }}><X size={20} /></button>
+        </div>
+
+        <div style={{ border: "1px solid var(--line)", borderRadius: "10px", padding: "12px", background: "var(--soft)" }}>
+          <span style={{ fontSize: "12px", color: "var(--muted)" }}>Original Order: <strong>{record.order_id}</strong></span>
+          {order && order.items?.map((item) => (
+            <div key={item.product_id} style={{ display: "flex", gap: "10px", marginTop: "8px", alignItems: "center" }}>
+              <img src={assetUrl(item.image_url)} alt="" style={{ width: "40px", height: "40px", objectFit: "cover", borderRadius: "6px" }} />
+              <div style={{ flex: 1 }}>
+                <span style={{ display: "block", fontSize: "13px", fontWeight: "bold" }}>{item.product_name}</span>
+                <small style={{ color: "var(--muted)" }}>Size: {item.size || "Standard"} · Qty: {item.qty}</small>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ border: "1px solid var(--line)", borderRadius: "12px", padding: "16px", background: "white", display: "flex", flexDirection: "column", gap: "12px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: "10px" }}>
+            <span>Status: <strong style={{ color: "var(--plum)", textTransform: "uppercase" }}>{record.status?.replace(/_/g, " ")}</strong></span>
+            {record.confidence_score != null && (
+              <span>Agent Confidence: <strong style={{ color: record.confidence_score >= 75 ? "#16a34a" : record.confidence_score >= 40 ? "#d97706" : "#ef4444" }}>{record.confidence_score}%</strong></span>
+            )}
+          </div>
+          
+          <div style={{ fontSize: "13px", display: "flex", flexDirection: "column", gap: "6px" }}>
+            {record.decision && <div>Decision: <strong>{record.decision.replace(/_/g, " ").toUpperCase()}</strong></div>}
+            {record.pickup_date && <div>Pickup Date: <strong>{new Date(record.pickup_date).toLocaleDateString("en-IN")} ({record.pickup_status})</strong></div>}
+            {record.refund_status && <div>Refund Status: <strong>{record.refund_status.toUpperCase()} ({record.refund_masked_details || "N/A"})</strong></div>}
+            {record.replacement_order_id && <div>Replacement Order ID: <strong>{record.replacement_order_id}</strong></div>}
+          </div>
+        </div>
+
+        {(record.status === "pending_evidence" || record.status === "needs_evidence") && (
+          <div style={{ border: "1px solid var(--line)", borderRadius: "12px", padding: "16px", background: "white", display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "var(--plum)", fontWeight: "bold", fontSize: "14px" }}>
+              <Camera size={16} /> Provide Return Video Evidence
+            </div>
+            <p style={{ margin: 0, fontSize: "12px", color: "var(--muted)", lineHeight: "1.4" }}>
+              Please record or upload a continuous 10-second 360° video showing the product, front, back, tag, packaging, and the shipping label clearly.
+            </p>
+
+            {recording ? (
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: "center" }}>
+                <video ref={videoPreviewRef} autoPlay muted playsInline style={{ width: "100%", maxHeight: "200px", background: "black", borderRadius: "8px" }} />
+                <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#ef4444", fontSize: "14px", fontWeight: "bold" }}>
+                  <Video size={16} className="spin" /> Recording: {recordingSeconds}s remaining
+                </div>
+                <button type="button" className="secondary-cta" onClick={stopRecording} style={{ borderColor: "#ef4444", color: "#ef4444" }}>Stop Recording</button>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: "10px" }}>
+                <button type="button" className="primary-cta" style={{ flex: 1 }} onClick={startRecording}>
+                  <Camera size={16} /> Use Camera
+                </button>
+                <label className="secondary-cta" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", gap: "8px", cursor: "pointer" }}>
+                  <FileVideo size={16} /> Select File
+                  <input type="file" accept="video/*" onChange={handleFileSelect} style={{ display: "none" }} />
+                </label>
+              </div>
+            )}
+
+            {videoPreviewUrl && !recording && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "8px", alignItems: "center", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
+                <video src={videoPreviewUrl} controls style={{ width: "100%", maxHeight: "200px", borderRadius: "8px" }} />
+                <button 
+                  type="button" 
+                  className="primary-cta" 
+                  onClick={handleSubmitEvidence} 
+                  disabled={uploading}
+                  style={{ width: "100%" }}
+                >
+                  {uploading ? <LoaderCircle className="spin" size={16} /> : <ShieldCheck size={16} />}
+                  {uploading ? statusText : "Submit Evidence for Agent 8 Review"}
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
+        {record.status_timeline && record.status_timeline.length > 0 && (
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            <span style={{ fontSize: "13px", fontWeight: "bold", color: "var(--muted)" }}>Status Timeline</span>
+            <div style={{ display: "flex", flexDirection: "column", gap: "12px", borderLeft: "2px solid var(--line)", paddingLeft: "15px", marginLeft: "10px" }}>
+              {record.status_timeline.map((entry, index) => (
+                <div key={index} style={{ position: "relative" }}>
+                  <div style={{ position: "absolute", left: "-21px", top: "3px", width: "10px", height: "10px", borderRadius: "50%", background: "var(--plum)" }} />
+                  <div style={{ fontSize: "13px", fontWeight: "bold", textTransform: "capitalize" }}>{entry.status.replace(/_/g, " ")}</div>
+                  <small style={{ color: "var(--muted)", display: "block" }}>{new Date(entry.timestamp).toLocaleString("en-IN")}</small>
+                  {entry.notes && <p style={{ margin: "4px 0 0 0", fontSize: "12px", color: "var(--muted)" }}>{entry.notes}</p>}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </aside>
+    </div>
+  );
 }
 
 function CheckoutDrawer({
@@ -1262,6 +1631,7 @@ export default function Storefront({ initialProductId = null }) {
   const [orders, setOrders] = useState([]);
   const [returns, setReturns] = useState([]);
   const [addresses, setAddresses] = useState([]);
+  const [selectedReturnId, setSelectedReturnId] = useState(null);
 
   useEffect(() => {
     // Restoring the browser session is intentionally client-only; the server render
@@ -1383,16 +1753,40 @@ export default function Storefront({ initialProductId = null }) {
     });
   }
 
-  async function startReturn(orderId) {
-    const reason = window.prompt("Why are you returning this order?");
+  async function startReturn(orderId, returnType = "refund") {
+    const reason = window.prompt(`Why are you ${returnType === "exchange" ? "exchanging" : "returning"} this order?`);
     if (!reason) return;
     try {
-      await createReturnRequest(orderId, reason);
+      const res = await createReturnRequest(orderId, reason, returnType);
       await refreshAccountData();
-      setDrawer("returns");
-      setToast("Return request created. Add evidence for Agent 8 review.");
+      setSelectedReturnId(res.id);
+      setDrawer("return-verify");
+      setToast(`${returnType === "exchange" ? "Exchange" : "Return"} request created. Add evidence for Agent 8 review.`);
     } catch (reasonError) { setToast(reasonError.message || "Could not create return"); }
   }
+
+  async function startReview(productId, orderId) {
+    const rating = Number(window.prompt("Rate this delivered product from 1 to 5:", "5"));
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      setToast("Please enter a whole-number rating from 1 to 5");
+      return;
+    }
+    const text = window.prompt("Write your review:", "");
+    if (text === null) return;
+    try {
+      await createReview({ product_id: productId, order_id: orderId, rating, text });
+      await refreshAccountData();
+      setToast("Review posted — Agent 4 is checking it in the background");
+    } catch (reason) {
+      setToast(reason.message || "Could not post this review");
+    }
+  }
+
+  function handleViewReturn(returnId) {
+    setSelectedReturnId(returnId);
+    setDrawer("return-verify");
+  }
+
 
   async function changeLanguage(languageCode) {
     if (!auth?.user) return;
@@ -1760,7 +2154,8 @@ export default function Storefront({ initialProductId = null }) {
         <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} />
         <CheckoutDrawer open={drawer === "checkout"} context={context} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => setDrawer("orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => setDrawer("addresses")} buyerName={auth?.user?.name} />
         <AddressManagerDrawer open={drawer === "addresses"} onClose={() => { setDrawer(null); refreshAccountData(); }} buyerId={auth?.user?.id} />
-        <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} />
+        <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} />
+        <ReturnVerificationDrawer open={drawer === "return-verify"} returnId={selectedReturnId} returns={returns} orders={orders} onClose={() => { setDrawer(null); refreshAccountData(); }} onRefreshData={refreshAccountData} />
         <TrustDock trust={trust} busy={busy} onClose={() => setTrust((current) => ({ ...current, open: false }))} onRunAll={runAll} />
         <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
         <ReviewSummaryDialog data={reviewSummary} onClose={() => setReviewSummary(null)} />
@@ -1777,7 +2172,7 @@ export default function Storefront({ initialProductId = null }) {
           <a className="logo" href="#top"><span>K</span><div><strong>Kavach</strong><small>SAATHI SHOP</small></div></a>
           <label className="search-box"><Search size={19} /><input value={search} onChange={(event) => { setSearch(event.target.value); setVisibleCount(50); }} placeholder="Try Saree, Kurti or Search by Product Code" /><kbd>⌘ K</kbd></label>
           <nav className={`utility-nav ${mobileNavOpen ? "open" : ""}`} aria-label="Account navigation">
-            <button type="button"><Headphones size={19} /><span>Support</span></button>
+            <button type="button" onClick={() => router.push("/support")}><Headphones size={19} /><span>Support</span></button>
             {auth?.user ? (
               <>
                 <label className="language-picker">
@@ -1844,7 +2239,8 @@ export default function Storefront({ initialProductId = null }) {
       <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} />
       <CheckoutDrawer open={drawer === "checkout"} context={context} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => setDrawer("orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => setDrawer("addresses")} buyerName={auth?.user?.name} />
       <AddressManagerDrawer open={drawer === "addresses"} onClose={() => { setDrawer(null); refreshAccountData(); }} buyerId={auth?.user?.id} />
-      <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} />
+      <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} />
+      <ReturnVerificationDrawer open={drawer === "return-verify"} returnId={selectedReturnId} returns={returns} orders={orders} onClose={() => { setDrawer(null); refreshAccountData(); }} onRefreshData={refreshAccountData} />
       <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
       <ReviewSummaryDialog data={reviewSummary} onClose={() => setReviewSummary(null)} />
       {toast && <div className="toast" role="status" aria-live="polite"><Check size={16} /> {toast}</div>}

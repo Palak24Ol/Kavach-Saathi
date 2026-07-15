@@ -6,7 +6,8 @@ import json
 import logging
 import secrets
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
+from pydantic import BaseModel
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -29,6 +30,7 @@ from kavach_saathi.db.models import (
     RazorpayWebhookEvent,
     ReturnRecord,
     Review,
+    SupportInteraction,
     User,
     WishlistItem,
 )
@@ -297,9 +299,6 @@ def _finalize_prepaid_order(session: Session, order: Order, payment: Payment, pa
             raise HTTPException(status_code=409, detail=f"Insufficient stock for variant {item.product_variant_id}")
 
     for item in order_items:
-        variant = locked_variants[item.product_variant_id]
-        variant.stock_qty -= item.qty
-
         # Delete from cart
         cart_item = (
             session.execute(
@@ -391,7 +390,6 @@ async def create_order(
             )
         )
         if payload.payment_mode == "cod":
-            variant.stock_qty -= cart_item.qty
             session.delete(cart_item)
 
     if payload.payment_mode == "cod":
@@ -509,27 +507,62 @@ async def list_my_orders(user: Annotated[User, Depends(_require_buyer)], session
     if order_ids:
         for item in session.execute(select(OrderItem).where(OrderItem.order_id.in_(order_ids))).scalars():
             items_by_order.setdefault(item.order_id, []).append(item)
-    return [
-        {
+
+    # Batch-load return records and reviews for all relevant orders
+    returns_by_order: dict[str, ReturnRecord] = {}
+    if order_ids:
+        for rr in session.execute(
+            select(ReturnRecord).where(ReturnRecord.order_id.in_(order_ids))
+        ).scalars():
+            returns_by_order[rr.order_id] = rr
+
+    result = []
+    for order in orders:
+        order_items = items_by_order.get(order.id, [])
+        # Check if buyer has already reviewed any product in this order
+        product_ids = list({i.product_id for i in order_items})
+        reviewed_products: set[str] = set()
+        if product_ids and order.status == OrderStatus.DELIVERED:
+            for rv in session.execute(
+                select(Review).where(Review.buyer_id == user.id, Review.product_id.in_(product_ids))
+            ).scalars():
+                reviewed_products.add(rv.product_id)
+
+        rr = returns_by_order.get(order.id)
+        result.append({
             "id": order.id,
             "status": order.status,
             "total_amount": order.total_amount,
             "payment_mode": order.payment_mode,
+            "exchange_tag": order.exchange_tag,
+            "original_order_id": order.original_order_id,
             "created_at": order.created_at,
+            "return_info": {
+                "id": rr.id,
+                "return_type": rr.return_type,
+                "status": rr.status,
+                "decision": rr.decision,
+                "confidence_score": rr.confidence_score,
+                "pickup_date": rr.pickup_date,
+                "refund_status": rr.refund_status,
+                "replacement_order_id": rr.replacement_order_id,
+                "created_at": rr.created_at,
+            } if rr else None,
             "items": [
                 {
                     "product_id": i.product_id,
-                    "product_name": session.get(Product, i.product_id).title,
-                    "image_url": session.get(Product, i.product_id).media_primary,
+                    "product_name": session.get(Product, i.product_id).title if session.get(Product, i.product_id) else "Unknown",
+                    "image_url": session.get(Product, i.product_id).media_primary if session.get(Product, i.product_id) else "",
                     "size": i.size,
                     "qty": i.qty,
                     "price_at_purchase": i.price_at_purchase,
+                    "already_reviewed": i.product_id in reviewed_products,
                 }
-                for i in items_by_order.get(order.id, [])
+                for i in order_items
             ],
-        }
-        for order in orders
-    ]
+        })
+    return result
+
 
 
 @router.get("/returns")
@@ -549,9 +582,19 @@ async def list_my_returns(
             "id": row.id,
             "order_id": row.order_id,
             "reason": row.reason,
-            "status": row.decision or "pending_evidence",
+            "return_type": row.return_type,
+            "status": row.status,
             "decision": row.decision,
             "confidence_score": row.confidence_score,
+            "pickup_date": row.pickup_date,
+            "pickup_status": row.pickup_status,
+            "refund_status": row.refund_status,
+            "refund_masked_details": row.refund_masked_details,
+            "replacement_order_id": row.replacement_order_id,
+            "evidence_images": row.evidence_images,
+            "evidence_checks": row.evidence_checks,
+            "status_timeline": row.status_timeline,
+            "decided_at": row.decided_at,
             "created_at": row.created_at,
         }
         for row in rows
@@ -572,18 +615,31 @@ async def create_return_request(
     existing = session.execute(select(ReturnRecord).where(ReturnRecord.order_id == order.id)).scalars().first()
     if existing:
         raise HTTPException(status_code=409, detail="A return already exists for this order")
+
+    return_type = getattr(payload, "return_type", "refund") or "refund"
+    if return_type not in ("refund", "exchange"):
+        return_type = "refund"
+
     record = ReturnRecord(
         id=f"RT-{uuid4().hex[:10].upper()}",
         order_id=order.id,
         buyer_id=user.id,
         reason=payload.reason,
+        return_type=return_type,
+        status="pending_evidence",
         decision=None,
     )
     session.add(record)
     order.status = OrderStatus.RETURN_INITIATED
     session.add(OrderStatusHistory(order_id=order.id, status=OrderStatus.RETURN_INITIATED, actor="user"))
     session.flush()
-    return {"id": record.id, "order_id": record.order_id, "reason": record.reason, "status": "pending_evidence"}
+    return {
+        "id": record.id,
+        "order_id": record.order_id,
+        "reason": record.reason,
+        "return_type": record.return_type,
+        "status": record.status,
+    }
 
 
 @router.post("/reviews", status_code=201)
@@ -596,29 +652,52 @@ async def create_review(
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    if payload.order_id:
-        owns_order = (
-            session.execute(
-                select(OrderItem).where(
-                    OrderItem.order_id == payload.order_id, OrderItem.product_id == payload.product_id
-                )
+    # Check that the user has a delivered order containing this product
+    has_delivered_order = (
+        session.execute(
+            select(Order)
+            .join(OrderItem, Order.id == OrderItem.order_id)
+            .where(
+                Order.buyer_id == user.id,
+                Order.id == payload.order_id,
+                Order.status == OrderStatus.DELIVERED,
+                OrderItem.product_id == payload.product_id
             )
-            .scalars()
-            .first()
         )
-        order = session.get(Order, payload.order_id)
-        if not owns_order or not order or order.buyer_id != user.id:
-            raise HTTPException(status_code=403, detail="This order doesn't match your purchase of this product")
+        .scalars()
+        .first()
+    )
+    if not has_delivered_order:
+        raise HTTPException(
+            status_code=403,
+            detail="You can only review products you have purchased and had delivered."
+        )
+
+    # Check for duplicate review by the same buyer for this product
+    duplicate = (
+        session.execute(
+            select(Review).where(Review.buyer_id == user.id, Review.product_id == payload.product_id)
+        )
+        .scalars()
+        .first()
+    )
+    if duplicate:
+        raise HTTPException(
+            status_code=409,
+            detail="You have already submitted a review for this product."
+        )
 
     review_id = f"RV-{uuid4().hex[:10].upper()}"
     review = Review(
         id=review_id,
         product_id=payload.product_id,
         buyer_id=user.id,
+        order_id=payload.order_id,
         rating=payload.rating,
         text=payload.text,
         media=payload.image_key,
         is_hidden_by_agent=False,
+        awaiting_analysis=True,
     )
     session.add(review)
 
@@ -1059,3 +1138,31 @@ async def razorpay_webhook(
             {"order_id": finalized_order.id, "buyer_id": finalized_order.buyer_id},
         )
     return {"status": "ok", "duplicate": False}
+
+
+class SupportLogRequest(BaseModel):
+    channel: Literal["call", "email"]
+
+
+@router.get("/support/info")
+async def get_support_info():
+    return {
+        "phone": "+91-9748572321",
+        "email": "manyagupta.123.ag@gmail.com"
+    }
+
+
+@router.post("/support/log")
+async def log_support_interaction(
+    payload: SupportLogRequest,
+    user: Annotated[User, Depends(_require_buyer)],
+    session: Session = Depends(get_session),
+):
+    interaction = SupportInteraction(
+        user_id=user.id,
+        channel=payload.channel,
+    )
+    session.add(interaction)
+    session.commit()
+    return {"status": "logged", "id": interaction.id}
+
