@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import random
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import bcrypt
 
@@ -29,6 +31,7 @@ from kavach_saathi.db.models import (
 from kavach_saathi.digipin import encode
 from kavach_saathi.order_status import OrderStatus
 
+ROOT = Path(__file__).resolve().parents[1]
 SEED = 20260713
 DEFAULT_PASSWORD = "KavachDemo@2026"
 
@@ -496,29 +499,138 @@ def make_orders(products: list[dict]) -> list[dict]:
     return orders
 
 
+# Weighted so the mix looks like a real marketplace (mostly happy buyers, a genuine
+# tail of complaints) rather than a flat/uniform spread across 1-5.
+_RATING_POOL = [5] * 42 + [4] * 28 + [3] * 16 + [2] * 8 + [1] * 6
+
+_REVIEW_TEMPLATES = {
+    5: [
+        "Bahut accha product hai, {material} ki quality expected se bhi better nikli!",
+        "Perfect fit aur finishing, bilkul jaisa photo mein dikhaya tha waisa hi mila.",
+        "Paisa vasool! {category} mein itni acchi quality kam price mein milna mushkil hai.",
+        "Delivery bhi time pe aa gayi aur product bhi top notch hai, highly recommended.",
+        "Family ke liye leke aayi thi, sabko bahut pasand aaya. 5 star deserve karta hai.",
+        "Second time order kiya hai isi seller se, quality consistent hai.",
+        "Excellent quality for the price, {material} feels premium and durable.",
+        "Bilkul original jaisa hai, koi complaint nahi. Will order again.",
+        "Great value for money, packaging bhi bahut acchi thi.",
+        "Superb! Colour bhi exactly wahi hai jo photo mein tha.",
+        "Best purchase this month, quality aur comfort dono ekdum sahi.",
+        "As described, no defects, fits perfectly. Very happy with this purchase.",
+        "Loved it! {material} ka feel bahut soft aur comfortable hai.",
+        "Genuinely impressed, itni detail ke saath banaya gaya hai product.",
+        "5 stars for sure, exceeded my expectations completely.",
+    ],
+    4: [
+        "Accha product hai, bas delivery thodi late ho gayi thi.",
+        "Quality achi hai lekin size thoda tight nikla, exchange karna pada.",
+        "Overall satisfied, {material} ki feel achi hai bas color thoda alag laga screen se.",
+        "Good product for the price, packaging aur better ho sakti thi.",
+        "Nice quality, ek do jagah stitching thodi loose thi but overall theek hai.",
+        "Value for money hai, thoda aur variety hoti to accha hota.",
+        "Comfortable and good looking, size chart thoda confusing tha.",
+        "Product achha hai, bas customer service thodi slow respond karti hai.",
+        "Satisfied with the purchase, expected slightly better finishing though.",
+        "Decent quality, {category} ke hisaab se price bhi reasonable hai.",
+        "Good but not great, kuch cheezein improve ho sakti hain.",
+        "Works well, thoda smell aa raha tha initially but wash karne ke baad theek ho gaya.",
+        "Nice fabric feel, color thoda halka hai photo ke comparison mein.",
+        "Happy with the purchase overall, delivery could've been faster.",
+        "Pretty good for daily use, bas ek button loose tha jo maine khud sahi kar liya.",
+    ],
+    3: [
+        "Average product hai, jo expect kiya tha utna nahi mila.",
+        "Thik thak hai, na acha na bura, average quality.",
+        "{material} quality theek hai but price ke hisaab se kuch aur expect kiya tha.",
+        "Product usable hai lekin finishing mein kami hai.",
+        "Size thoda mismatch tha, quality average lagi.",
+        "Delivery time pe hui, product bas theek thaak hai.",
+        "Kaam chal jaayega, but repurchase nahi karungi.",
+        "Mixed feelings, kuch acha kuch improve karne layak hai.",
+        "Okayish product, photo se thoda alag nikla.",
+        "Not bad, not great, does the job for now.",
+        "Quality average hai, is price range mein better options bhi honge.",
+        "Product theek hai but packaging damaged aayi thi.",
+        "Satisfactory but nothing special about this one.",
+        "Would've expected better {material} quality at this price point.",
+        "Decent for occasional use, daily use ke liye durable nahi lagta.",
+    ],
+    2: [
+        "Quality expected se kam nikli, thoda disappoint hui.",
+        "Product photo jaisa nahi laga, {material} bhi cheap feel ho raha hai.",
+        "Size sahi nahi tha aur return process bhi lengthy hai.",
+        "Stitching kharab thi, ek hi wash mein loose ho gayi.",
+        "Not worth the price, better options available elsewhere.",
+        "Delivery late hui aur product bhi damaged mila.",
+        "Disappointed with the quality, expected better from the description.",
+        "Color bilkul alag tha jo dikhaya gaya tha usse.",
+        "Fitting issue tha, exchange karna pada jo hassle raha.",
+        "Cheap material use kiya gaya hai, price ke hisaab se theek nahi laga.",
+        "Product mein defect tha, customer care se contact karna pada.",
+        "Expected better packaging, product thoda damaged condition mein aaya.",
+        "Not satisfied, quality control better honi chahiye.",
+        "{category} ke hisaab se yeh product average se bhi kam hai.",
+        "Won't recommend, quality issues within first use.",
+    ],
+    1: [
+        "Bahut bekaar product hai, paisa waste ho gaya.",
+        "Product turant kharab ho gaya, ek din bhi nahi chala.",
+        "Total waste of money, quality bilkul bhi acchi nahi hai.",
+        "Fake material lagta hai, bilkul bhi original jaisa nahi.",
+        "Delivery mein bahut delay hua aur product bhi defective mila.",
+        "Worst purchase ever, seller se refund maang rahi hoon.",
+        "Product photo se bilkul match nahi karta, misleading listing hai.",
+        "Itni ghatiya quality expect nahi ki thi, bahut nirasha hui.",
+        "Size completely wrong tha aur return bhi nahi ho raha.",
+        "{material} bilkul cheap feel hota hai, ek hi din mein phat gaya.",
+        "Customer service ne bhi koi help nahi ki, very disappointed.",
+        "Do not buy, quality is extremely poor for this price.",
+        "Product damaged aaya aur seller ne exchange se mana kar diya.",
+        "Complete waste, packaging bhi bahut kharab thi.",
+        "Never ordering from this seller again, terrible experience.",
+    ],
+}
+
+_IRRELEVANT_REASONS = [
+    "photo shows a pet instead of the product",
+    "photo is a listing screenshot",
+    "photo shows unrelated packaging",
+]
+
+
 def make_reviews(products: list[dict]) -> list[dict]:
+    """Random-but-deterministic review count per product (5-30) so bestsellers look
+    busy and niche items look thin, like a real marketplace -- rather than every
+    product having an identical, obviously-synthetic review count. ~28% of reviews
+    carry a photo, and roughly one in eight of those is deliberately a mismatched
+    photo (copied from an unrelated product), giving Agent 4's real CLIP+BERT pass
+    (see classify_seeded_reviews.py) genuine mismatches to catch instead of every
+    photo trivially matching. The 5-30 range (not wider) is deliberate: every photo
+    review costs one real CLIP inference during seeding, so the total stays in the
+    thousands rather than tens of thousands to keep that pass a few minutes, not hours.
+    """
+    rng = random.Random(SEED)
     records: list[dict] = []
-    irrelevant_reasons = [
-        "photo shows a pet instead of the product",
-        "photo is a listing screenshot",
-        "photo shows unrelated packaging",
-    ]
-    for product_index, product in enumerate(products, 1):
-        for review_number in range(2):
+    for product in products:
+        review_count = rng.randint(5, 30)
+        for _ in range(review_count):
             index = len(records) + 1
-            relevant = review_number == 0 or product_index % 4 != 0
+            rating = rng.choice(_RATING_POOL)
+            text = rng.choice(_REVIEW_TEMPLATES[rating]).format(
+                material=product["material"].lower(), category=product["category"].lower()
+            )
+            has_media = rng.random() < 0.28
+            relevant = True if not has_media else rng.random() > 0.12
+            created_at = datetime.now(UTC) - timedelta(days=rng.randint(1, 540), hours=rng.randint(0, 23))
             records.append(
                 {
-                    "id": f"RV-{index:04d}",
-                    "buyer_id": f"B-{((index - 1) % 10) + 1:03d}",
+                    "id": f"RV-{index:05d}",
+                    "buyer_id": f"B-{rng.randint(1, 10):03d}",
                     "product_id": product["id"],
-                    "rating": 3 + (index % 3),
-                    "text": (
-                        f"{product['material']} quality aur value expected jaisi thi."
-                        if relevant
-                        else "Product theek hai, photo galat upload ho gaya."
-                    ),
-                    "media": f"assets/mock/reviews/RV-{index:04d}.png",
+                    "rating": rating,
+                    "text": text,
+                    "media": f"assets/mock/reviews/RV-{index:05d}.png" if has_media else None,
+                    "created_at": created_at,
                     "expected_relevant": relevant,
                     "similarity_score": (
                         round(0.83 + (index % 9) * 0.012, 2)
@@ -528,19 +640,25 @@ def make_reviews(products: list[dict]) -> list[dict]:
                     "relevance_reason": (
                         "review media matches product color and silhouette"
                         if relevant
-                        else irrelevant_reasons[index % 3]
+                        else _IRRELEVANT_REASONS[index % len(_IRRELEVANT_REASONS)]
                     ),
                 }
             )
-    records[0].update(
+
+    # tests/test_api_workflows.py and scripts/evaluate_demo.py's golden path both
+    # exercise a fixed RV-GOOD/RV-BAD pair on P-001 -- keep those two literal IDs and
+    # image paths stable regardless of the randomized generation above.
+    p001_indices = [i for i, record in enumerate(records) if record["product_id"] == "P-001"]
+    records[p001_indices[0]].update(
         {
             "id": "RV-GOOD",
             "media": "assets/mock/reviews/RV-GOOD.png",
             "expected_relevant": True,
             "similarity_score": 0.94,
+            "relevance_reason": "review media matches product color and silhouette",
         }
     )
-    records[1].update(
+    records[p001_indices[1]].update(
         {
             "id": "RV-BAD",
             "media": "assets/mock/reviews/RV-BAD.png",
@@ -671,12 +789,26 @@ def reset_database() -> None:
         session.commit()
 
 
+def _export_reviews_json(reviews: list[dict]) -> None:
+    """Keeps data/seed/reviews.json in sync with make_reviews()'s live output --
+    scripts/generate_fixture_media.py (review photo generation) and
+    scripts/evaluate_demo.py (accuracy scoring against expected_relevant) both read
+    this file directly rather than the Postgres DB, so a stale copy would silently
+    make those scripts test against a different review set than what's actually
+    seeded."""
+    export = [{**review, "created_at": review["created_at"].isoformat()} for review in reviews]
+    (ROOT / "data" / "seed" / "reviews.json").write_text(
+        json.dumps(export, indent=2, ensure_ascii=False), encoding="utf-8"
+    )
+
+
 def seed_database() -> dict[str, int]:
     sellers = make_sellers()
     products = make_products()
     buyers = make_buyers()
     orders = make_orders(products)
     reviews = make_reviews(products)
+    _export_reviews_json(reviews)
     addresses = make_addresses()
     returns = make_returns(orders)
     password_hash = _hash_password(DEFAULT_PASSWORD)
@@ -917,6 +1049,7 @@ def seed_database() -> dict[str, int]:
                     text=review["text"],
                     media=review["media"],
                     is_hidden_by_agent=False,
+                    created_at=review["created_at"],
                 )
             )
             session.add(
