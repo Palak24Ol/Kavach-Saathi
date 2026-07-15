@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from mangum import Mangum
 from sqlalchemy.orm import Session
 
+from kavach_saathi.admin_api import router as admin_router
 from kavach_saathi.auth import (
     AuthError,
     authenticate_user,
@@ -222,6 +223,7 @@ def create_app() -> FastAPI:
     app.include_router(seller_router, prefix=prefix, tags=["seller"])
     app.include_router(specs_router, prefix=prefix, tags=["spec-enforcer"])
     app.include_router(commerce_router, prefix=prefix, tags=["commerce"])
+    app.include_router(admin_router, prefix=prefix, tags=["admin"])
 
     @app.on_event("startup")
     async def start_event_consumers() -> None:
@@ -454,7 +456,12 @@ def create_app() -> FastAPI:
                 ExpiresIn=900,
             )
         else:
-            url = f"http://localhost:8000{prefix}/mock-uploads/{key}"
+            # PUBLIC_BASE_URL overrides the default when the backend isn't reachable
+            # at exactly localhost:8000 (a remapped docker-compose port, a real public
+            # deployment) -- the browser uploads directly to this URL, bypassing the
+            # Next.js proxy, so it must be reachable from the browser itself.
+            base = (cfg.public_base_url or "http://localhost:8000").rstrip("/")
+            url = f"{base}{prefix}/mock-uploads/{key}"
         return PresignResponse(object_key=key, upload_url=url, expires_in=900)
 
     @app.post(f"{prefix}/twilio/voice/{{order_id}}")
