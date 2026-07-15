@@ -1,0 +1,67 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kavach
+      POSTGRES_PASSWORD: kavach
+      POSTGRES_DB: kavach_saathi
+    ports:
+      - "5432:5432"
+    volumes:
+      - kavach_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kavach -d kavach_saathi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - kavach_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://kavach:kavach@postgres:5432/kavach_saathi
+      REDIS_URL: redis://redis:6379/0
+      FRONTEND_ORIGIN: http://localhost:3000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./assets:/app/assets
+
+  frontend:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      AGENT_API_ORIGIN: http://backend:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  kavach_postgres_data:
+  kavach_redis_data:

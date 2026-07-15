@@ -1,0 +1,28 @@
+FROM python:3.13-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml README.md ./
+# A minimal package stub lets pip resolve and install every dependency (the expensive,
+# rarely-changing part -- torch/transformers alone is multi-GB) before the real source
+# is copied in. Without this, `COPY src` invalidates the dependency-install layer on
+# every source change, forcing a full multi-GB reinstall for a one-line agent fix.
+RUN mkdir -p src/kavach_saathi && touch src/kavach_saathi/__init__.py
+RUN pip install --no-cache-dir .
+
+COPY src ./src
+COPY data ./data
+COPY assets ./assets
+COPY alembic.ini ./alembic.ini
+COPY migrations ./migrations
+COPY scripts ./scripts
+
+RUN pip install --no-cache-dir --no-deps .
+
+EXPOSE 8000
+
+CMD ["uvicorn", "kavach_saathi.app:app", "--host", "0.0.0.0", "--port", "8000"]
