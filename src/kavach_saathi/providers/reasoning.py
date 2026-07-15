@@ -133,6 +133,9 @@ class GroqReasoningProvider(ReasoningProvider):
         # -- meta-llama/llama-4-maverick-17b-128e-instruct 404s on this account), so
         # image-bearing calls route there instead of failing outright when this is the
         # only reachable provider (e.g. Gemini's shared-capacity 503s).
+        # meta-llama/llama-4-scout (the vision model) 400s on `reasoning_effort` -- that
+        # parameter is only accepted by the text-only openai/gpt-oss-120b model.
+        extra_params: dict[str, Any] = {}
         if images:
             content: Any = [{"type": "text", "text": prompt}]
             for image_bytes in images:
@@ -142,6 +145,7 @@ class GroqReasoningProvider(ReasoningProvider):
         else:
             content = prompt
             model = self.settings.groq_model
+            extra_params["reasoning_effort"] = reasoning_effort
 
         async def invoke() -> Any:
             return await self.client.chat.completions.create(
@@ -150,7 +154,6 @@ class GroqReasoningProvider(ReasoningProvider):
                     {"role": "system", "content": system},
                     {"role": "user", "content": content},
                 ],
-                reasoning_effort=reasoning_effort,
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
@@ -160,6 +163,7 @@ class GroqReasoningProvider(ReasoningProvider):
                     },
                 },
                 temperature=0,
+                **extra_params,
             )
 
         response = await self._with_rate_limit_retry(invoke)
