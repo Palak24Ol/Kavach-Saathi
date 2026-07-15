@@ -456,12 +456,16 @@ def create_app() -> FastAPI:
                 ExpiresIn=900,
             )
         else:
-            # PUBLIC_BASE_URL overrides the default when the backend isn't reachable
-            # at exactly localhost:8000 (a remapped docker-compose port, a real public
-            # deployment) -- the browser uploads directly to this URL, bypassing the
-            # Next.js proxy, so it must be reachable from the browser itself.
-            base = (cfg.public_base_url or "http://localhost:8000").rstrip("/")
-            url = f"{base}{prefix}/mock-uploads/{key}"
+            # A relative path through the Next.js rewrite (see web/next.config.mjs's
+            # `/agent-api/:path*` rule) keeps this same-origin from the browser's point
+            # of view no matter what host/port the page itself was loaded from -- no
+            # CORS, no guessing whether localhost:8000 or a tunnel hostname is what the
+            # browser can actually reach. PUBLIC_BASE_URL is for the Twilio webhook
+            # callback (a server-to-server URL Twilio's servers must reach) and must
+            # not be reused here: it previously pointed browser uploads at that ngrok
+            # tunnel, which fails with "Failed to fetch" whenever the tunnel isn't the
+            # thing serving the page (e.g. testing directly against localhost).
+            url = f"/agent-api{prefix}/mock-uploads/{key}"
         return PresignResponse(object_key=key, upload_url=url, expires_in=900)
 
     @app.post(f"{prefix}/twilio/voice/{{order_id}}")
