@@ -20,6 +20,7 @@ dependencies = [
   "google-genai>=1.0,<2",
   "groq>=0.18,<1",
   "httpx>=0.27,<1",
+  "indic-nlp-library>=0.92,<1",
   "langgraph>=0.2,<1",
   "mangum>=0.19,<1",
   "numpy>=1.26,<3",
