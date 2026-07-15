@@ -199,7 +199,12 @@ async def create_order(
                 amount=total_amount,
             )
         )
-    session.flush()
+    # Commit before publishing: the Redis Streams consumer that reacts to this event
+    # can pick it up and query the order in a separate connection almost immediately,
+    # and a flush alone is only visible inside this transaction -- publishing before
+    # commit let the consumer race the commit and 404 on an order it can't see yet
+    # (observed live as a DataNotFoundError in Agent 7's background worker).
+    session.commit()
 
     if payload.payment_mode == "cod":
         publish_event(ORDER_PLACED_STREAM, {"order_id": order_id, "buyer_id": user.id})
@@ -254,7 +259,9 @@ async def verify_payment(
 
     payment.status = "captured"
     payment.transaction_ref = payload.razorpay_payment_id
-    session.flush()
+    # Commit before publishing -- see the matching comment in create_order() above;
+    # the same consumer-races-the-commit failure applies here for the prepaid path.
+    session.commit()
     publish_event(ORDER_PLACED_STREAM, {"order_id": order_id, "buyer_id": user.id})
     return {"order_id": order_id, "payment_status": payment.status}
 
@@ -320,7 +327,10 @@ async def create_review(
     total_rating = product.rating * product.review_count + payload.rating
     product.review_count += 1
     product.rating = round(total_rating / product.review_count, 2)
-    session.flush()
+    # Commit before publishing -- see the matching comment in create_order() above;
+    # Agent 4's review-truth consumer can otherwise query this review before it's
+    # durably committed.
+    session.commit()
 
     event_published = publish_event(
         REVIEW_SUBMITTED_STREAM,
