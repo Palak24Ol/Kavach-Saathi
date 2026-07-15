@@ -2,9 +2,11 @@
 
 import {
   ArrowRight,
+  ArrowLeft,
   BadgeCheck,
   Camera,
   Check,
+  ChevronDown,
   ChevronRight,
   CircleUserRound,
   Headphones,
@@ -15,7 +17,10 @@ import {
   Menu,
   MessageCircle,
   Mic,
+  Minus,
   PackageCheck,
+  Package,
+  Plus,
   RotateCcw,
   Search,
   ShieldAlert,
@@ -27,14 +32,21 @@ import {
   Truck,
   X,
 } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
   addToCart as apiAddToCart,
+  addWishlist,
   assetUrl,
   createOrder,
+  createReturnRequest,
   createReview,
   getCart,
+  getWishlist,
+  listMyOrders,
+  listMyReturns,
   loadAuthSession,
   login,
   logout,
@@ -42,8 +54,10 @@ import {
   post,
   postAndPoll,
   removeCartItem,
+  removeWishlist,
   request,
   signup,
+  updateCartItem,
 } from "@/lib/api";
 
 const LANGUAGE_OPTIONS = [
@@ -89,14 +103,15 @@ function money(value) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(value);
 }
 
-function ProductCard({ product, onOpen, onAdd }) {
+function ProductCard({ product, onOpen, onAdd, onWishlist, wished, pending }) {
+  const needsSize = Object.keys(product.size_chart || {}).length > 0;
   return (
     <article className="product-card" data-testid={`product-${product.id}`} data-category={product.category}>
-      <button className="product-visual" type="button" onClick={() => onOpen(product)} aria-label={`Open ${product.name}`}>
+      <div className="product-visual" role="button" tabIndex={0} onClick={() => onOpen(product)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen(product); }} aria-label={`Open ${product.name}`}>
         <img src={assetUrl(product.image_url)} alt={product.name} />
         <span className="agent-checked"><ShieldCheck size={13} /> Agent checked</span>
-        <span className="heart"><Heart size={17} /></span>
-      </button>
+        <button className={`heart ${wished ? "active" : ""}`} type="button" onClick={(event) => { event.stopPropagation(); onWishlist(product); }} aria-label={wished ? `Remove ${product.name} from wishlist` : `Add ${product.name} to wishlist`}><Heart size={17} fill={wished ? "currentColor" : "none"} /></button>
+      </div>
       <div className="product-info">
         <p className="product-brand">{product.brand}</p>
         <button className="product-name" type="button" onClick={() => onOpen(product)}>{product.name}</button>
@@ -109,10 +124,32 @@ function ProductCard({ product, onOpen, onAdd }) {
         <div className="card-bottom">
           <span className="rating-pill">{product.rating} <Star size={10} fill="currentColor" /></span>
           <small>{product.review_count.toLocaleString("en-IN")} reviews</small>
-          <button type="button" onClick={() => onAdd(product)} aria-label={`Add ${product.name} to cart`}><ShoppingCart size={16} /></button>
+          <button
+            type="button"
+            onClick={() => needsSize ? onOpen(product) : onAdd(product)}
+            aria-label={needsSize ? `Choose a size for ${product.name}` : `Add ${product.name} to cart`}
+            aria-busy={pending}
+            disabled={pending}
+          >
+            {pending ? <LoaderCircle className="spin" size={16} /> : <ShoppingCart size={16} />}
+          </button>
         </div>
       </div>
     </article>
+  );
+}
+
+function QuantityStepper({ qty, onDecrease, onIncrease, busy = false, max = 10, compact = false }) {
+  return (
+    <div className={`quantity-stepper ${compact ? "compact" : ""}`} aria-label={`Quantity ${qty}`}>
+      <button type="button" onClick={onDecrease} disabled={busy} aria-label="Decrease quantity">
+        {busy ? <LoaderCircle className="spin" size={14} /> : <Minus size={14} />}
+      </button>
+      <output aria-live="polite" aria-label="Current quantity">{qty}</output>
+      <button type="button" onClick={onIncrease} disabled={busy || qty >= max} aria-label={qty >= max ? "Maximum quantity 10 reached" : "Increase quantity"}>
+        <Plus size={14} />
+      </button>
+    </div>
   );
 }
 
@@ -151,7 +188,7 @@ function TrustDock({ trust, busy, onClose, onRunAll }) {
   );
 }
 
-function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, onAsk, onAskVoice, voiceAudioUrl, agentAnswer, sizeSaathi, onSubmitReview }) {
+function ProductPageView({ product, busy, cart, cartBusy, onBack, onClose, onAdd, onUpdateCart, onOpenCart, onWishlist, wished, onSize, onReview, onAsk, onAskVoice, voiceAudioUrl, agentAnswer, sizeSaathi, onSubmitReview }) {
   const [size, setSize] = useState("M");
 
   useEffect(() => {
@@ -202,15 +239,26 @@ function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, 
     onAskVoice(null, message);
   }
 
+  const sizes = useMemo(() => Object.keys(product?.size_chart || {}), [product]);
   if (!product) return null;
-  const sizes = Object.keys(product.size_chart || {});
+  const selectedSize = sizes.includes(size) ? size : sizes[0] || "Standard";
+  const variantId = variantIdFor(product, selectedSize);
+  const cartItem = cart.find((item) => item.product_variant_id === variantId);
+  const maxQty = Math.min(10, cartItem?.stock_qty ?? product.stock ?? 10);
   return (
-    <div className={`drawer-layer ${open ? "open" : ""}`} aria-hidden={!open}>
-      <button className="drawer-scrim" type="button" onClick={onClose} aria-label="Close product details" />
-      <aside className="product-drawer" role="dialog" aria-modal="true" aria-label={product.name}>
-        <button className="drawer-close" type="button" onClick={onClose} aria-label="Close"><X size={20} /></button>
-        <div className="drawer-gallery">
-          <img src={assetUrl(product.image_url)} alt={product.name} />
+    <div className="product-page-shell">
+      <header className="product-page-header">
+        <button type="button" onClick={onBack} aria-label="Back to previous page"><ArrowLeft size={20} /></button>
+        <Link className="logo" href="/" aria-label="Kavach Saathi home"><span>K</span><div><strong>Kavach</strong><small>SAATHI SHOP</small></div></Link>
+        <div className="product-page-header-actions">
+          <button type="button" onClick={() => onWishlist(product)} aria-label={wished ? "Remove from wishlist" : "Add to wishlist"}><Heart size={19} fill={wished ? "currentColor" : "none"} /></button>
+          <button type="button" onClick={onOpenCart} aria-label={`Open cart with ${cart.reduce((sum, item) => sum + item.qty, 0)} items`}><ShoppingCart size={19} /><span>Cart</span>{cart.length > 0 && <b>{cart.reduce((sum, item) => sum + item.qty, 0)}</b>}</button>
+          <button type="button" onClick={onClose} aria-label="Close product details"><X size={20} /></button>
+        </div>
+      </header>
+      <main className="product-page" aria-label={product.name}>
+        <div className="drawer-gallery four-view-gallery">
+          {(product.catalogue_images?.length ? product.catalogue_images : ["front", "back", "left", "right"].map((angle) => ({ angle, url: product.image_url }))).map((image) => <figure key={image.angle}><img src={assetUrl(image.url)} alt={`${product.name} ${image.angle} view`} /><figcaption>{image.angle === "left" || image.angle === "right" ? `${image.angle} side` : image.angle}</figcaption></figure>)}
           <span><ShieldCheck size={15} /> Catalogue & specs checked</span>
         </div>
         <div className="drawer-content">
@@ -222,7 +270,7 @@ function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, 
           {!!product.badges?.length && <div className="product-badges">{product.badges.map((badge) => <span key={badge}><Check size={11} /> {badge}</span>)}</div>}
           <div className="trust-banner"><ShieldCheck size={19} /><div><strong>Verified product evidence</strong><p>Agent 1 checked imagery. Agent 2 matched seller claims to label-backed specs.</p></div></div>
 
-          {!!sizes.length && <div className="size-section"><div className="section-label"><strong>Select size</strong><button type="button" onClick={onSize} disabled={busy}>{busy ? <LoaderCircle className="spin" size={13} /> : <Sparkles size={13} />} Ask Size Saathi</button></div><div className="size-row">{sizes.map((item) => <button className={size === item ? "selected" : ""} type="button" key={item} onClick={() => setSize(item)}>{item}</button>)}</div>{sizeSaathi && <div className="agent-answer size-saathi-answer">{sizeSaathi.size ? <strong>Recommended: {sizeSaathi.size}</strong> : null}{sizeSaathi.message && <span>{sizeSaathi.message}</span>}{sizeSaathi.audioUrl && <audio controls src={sizeSaathi.audioUrl} style={{ width: "100%", marginTop: 8 }} />}</div>}</div>}
+          {!!sizes.length && <div className="size-section"><div className="section-label"><strong>Select size</strong><button type="button" onClick={onSize} disabled={busy}>{busy ? <LoaderCircle className="spin" size={13} /> : <Sparkles size={13} />} Ask Size Saathi</button></div><div className="size-row">{sizes.map((item) => <button className={selectedSize === item ? "selected" : ""} type="button" key={item} onClick={() => setSize(item)}>{item}</button>)}</div>{sizeSaathi && <div className="agent-answer size-saathi-answer">{sizeSaathi.size ? <strong>Recommended: {sizeSaathi.size}</strong> : null}{sizeSaathi.message && <span>{sizeSaathi.message}</span>}{sizeSaathi.audioUrl && <audio controls src={sizeSaathi.audioUrl} style={{ width: "100%", marginTop: 8 }} />}</div>}</div>}
 
           <dl className="spec-list">
             <div><dt>Material</dt><dd>{product.material || product.specs.fabric}</dd></div>
@@ -233,9 +281,27 @@ function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, 
             <div><dt>Return</dt><dd>{product.return_window_days} days</dd></div>
           </dl>
 
+          <section className="product-specifications"><div className="section-label"><strong>Product specifications</strong><small>Stored listing data used for grounded comparisons</small></div><dl>
+            {(product.specifications?.length ? product.specifications : Object.entries(product.specs || {}).map(([key, value]) => ({ key, label: key.replaceAll("_", " "), value }))).map((item) => <div key={item.key}><dt>{item.label}</dt><dd>{item.key.includes("color") && /^#[0-9a-f]{6}$/i.test(String(item.value)) && <i className="color-swatch" style={{ background: item.value }} />}{Array.isArray(item.value) ? item.value.join(", ") : String(item.value)}{item.unit ? ` ${item.unit}` : ""}<small>{item.verified ? "Verified" : "Seller specified"}</small></dd></div>)}
+          </dl></section>
+
+          {!!sizes.length && <section className="size-chart"><div className="section-label"><strong>Size chart</strong><small>Garment measurements in cm</small></div><div className="size-chart-scroll"><table><thead><tr><th>Size</th>{Array.from(new Set(Object.values(product.size_chart).flatMap((row) => Object.keys(row)))).map((key) => <th key={key}>{key.replaceAll("_", " ")} (cm)</th>)}</tr></thead><tbody>{Object.entries(product.size_chart).map(([chartSize, dimensions]) => <tr key={chartSize}><th>{chartSize}</th>{Array.from(new Set(Object.values(product.size_chart).flatMap((row) => Object.keys(row)))).map((key) => <td key={key}>{dimensions[key] ?? "—"}</td>)}</tr>)}</tbody></table></div></section>}
+
           {!!product.highlights?.length && <div className="product-highlights"><strong>Why shoppers choose it</strong><ul>{product.highlights.map((highlight) => <li key={highlight}><Check size={12} /> {highlight}</li>)}</ul>{product.presentation?.why_it_wins && <p><Sparkles size={13} /> {product.presentation.why_it_wins}</p>}</div>}
 
-          <div className="drawer-actions"><button className="secondary-cta" type="button" onClick={onReview} disabled={busy}><MessageCircle size={16} /> Check review truth</button><button className="primary-cta" type="button" onClick={() => onAdd(product, size)}><ShoppingBag size={16} /> Add to cart</button></div>
+          <div className="drawer-actions">
+            <button className="secondary-cta" type="button" onClick={onReview} disabled={busy}><MessageCircle size={16} /> Check review truth</button>
+            {cartItem ? (
+              <div className="product-cart-controls">
+                <QuantityStepper qty={cartItem.qty} max={maxQty} busy={cartBusy === cartItem.id} onDecrease={() => onUpdateCart(cartItem, cartItem.qty - 1)} onIncrease={() => onUpdateCart(cartItem, cartItem.qty + 1)} />
+                <button className="primary-cta" type="button" onClick={onOpenCart}>Go to cart <ArrowRight size={16} /></button>
+              </div>
+            ) : (
+              <button className="primary-cta" type="button" onClick={() => onAdd(product, selectedSize)} disabled={cartBusy === variantId} aria-busy={cartBusy === variantId}>
+                {cartBusy === variantId ? <LoaderCircle className="spin" size={16} /> : <ShoppingBag size={16} />} {cartBusy === variantId ? "Adding…" : "Add to cart"}
+              </button>
+            )}
+          </div>
 
           <form className="ask-saathi" onSubmit={(event) => { event.preventDefault(); onAsk(question); }}>
             <label htmlFor="product-question"><Mic size={15} /> Ask in Hindi or English</label>
@@ -320,7 +386,7 @@ function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, 
             </div>
           )}
         </div>
-      </aside>
+      </main>
     </div>
   );
 }
@@ -372,7 +438,7 @@ function ReviewSummaryDialog({ data, onClose }) {
   );
 }
 
-function CartDrawer({ items, open, onClose, onRemove, onCheckout }) {
+function CartDrawer({ items, open, busyItem, onClose, onUpdate, onRemove, onCheckout }) {
   const total = items.reduce((sum, item) => sum + item.line_total, 0);
   return (
     <div className={`drawer-layer ${open ? "open" : ""}`} aria-hidden={!open}>
@@ -381,12 +447,23 @@ function CartDrawer({ items, open, onClose, onRemove, onCheckout }) {
         <div className="side-heading"><div><p>YOUR CART</p><h2>{items.length ? `${items.length} item${items.length > 1 ? "s" : ""}` : "Cart is empty"}</h2></div><button type="button" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
         <div className="cart-items">
           {!items.length && <div className="cart-empty"><ShoppingBag size={34} /><p>Add something you love. Kavach Saathi will verify it along the way.</p></div>}
-          {items.map((item) => <article className="cart-item" key={item.id}><img src={assetUrl(item.image_url)} alt="" /><div><strong>{item.product_name}</strong><p>Size {item.size || "Standard"} · Qty {item.qty}</p><span>{money(item.unit_price)}</span><button type="button" onClick={() => onRemove(item)}>Remove</button></div><ShieldCheck size={18} /></article>)}
+          {items.map((item) => <article className="cart-item" key={item.id}><img src={assetUrl(item.image_url)} alt={item.product_name} /><div><strong>{item.product_name}</strong><p>Size {item.size || "Standard"}</p><span>{money(item.line_total)}</span><QuantityStepper compact qty={item.qty} max={Math.min(10, item.stock_qty)} busy={busyItem === item.id} onDecrease={() => onUpdate(item, item.qty - 1)} onIncrease={() => onUpdate(item, item.qty + 1)} /><button type="button" onClick={() => onRemove(item)} disabled={busyItem === item.id}>Remove</button></div><ShieldCheck size={18} /></article>)}
         </div>
         {!!items.length && <div className="cart-total"><div><span>Product total</span><strong>{money(total)}</strong></div><div><span>Delivery</span><strong className="free">FREE</strong></div><div className="grand-total"><span>Order total</span><strong>{money(total)}</strong></div><button className="primary-cta" type="button" onClick={onCheckout}>Continue to secure checkout <ArrowRight size={17} /></button><p><ShieldCheck size={13} /> Address and delivery consent will be verified before dispatch.</p></div>}
       </aside>
     </div>
   );
+}
+
+function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onOpenProduct, onRemoveWishlist, onStartReturn }) {
+  const title = type === "orders" ? "My Orders" : type === "wishlist" ? "My Wishlist" : "My Returns";
+  const items = type === "orders" ? orders : type === "wishlist" ? wishlist : returns;
+  return <div className={`drawer-layer ${open ? "open" : ""}`} aria-hidden={!open}><button className="drawer-scrim" type="button" onClick={onClose} aria-label={`Close ${title}`} /><aside className="side-drawer account-data-drawer" role="dialog" aria-modal="true" aria-label={title}><div className="side-heading"><div><p>YOUR ACCOUNT</p><h2>{title}</h2></div><button type="button" onClick={onClose} aria-label="Close"><X size={20} /></button></div><div className="account-data-list">
+    {!items.length && <div className="cart-empty"><Package size={34} /><p>No {title.toLowerCase()} yet.</p></div>}
+    {type === "orders" && orders.map((order) => <article className="account-record" key={order.id}><div><strong>{order.id}</strong><span>{order.status}</span></div><p>{new Date(order.created_at).toLocaleDateString("en-IN")} · {money(order.total_amount)} · {order.payment_mode?.toUpperCase()}</p>{order.items.map((item) => <button type="button" key={`${order.id}-${item.product_id}`} onClick={() => onOpenProduct(item.product_id)}><img src={assetUrl(item.image_url)} alt="" /><span>{item.product_name}<small>Size {item.size || "Standard"} · Qty {item.qty}</small></span></button>)}{order.status === "DELIVERED" ? <button className="secondary-cta" type="button" onClick={() => onStartReturn(order.id)}>Request return</button> : <small>Return becomes available after delivery.</small>}</article>)}
+    {type === "wishlist" && wishlist.map((item) => <article className="account-record wishlist-record" key={item.id}><button type="button" onClick={() => onOpenProduct(item.product.id)}><img src={assetUrl(item.product.image_url)} alt="" /><span><strong>{item.product.name}</strong><small>{money(item.product.price)} · {item.product.stock} available</small></span></button><button className="secondary-cta" type="button" onClick={() => onRemoveWishlist(item.product.id)}>Remove</button></article>)}
+    {type === "returns" && returns.map((item) => <article className="account-record" key={item.id}><div><strong>{item.id}</strong><span>{item.status}</span></div><p>Order {item.order_id}</p><p>{item.reason}</p>{item.confidence_score != null && <small>Agent confidence: {item.confidence_score}%</small>}</article>)}
+  </div></aside></div>;
 }
 
 function CheckoutDrawer({ open, context, busy, step, verifiedAddress, orderId, onClose, onVerify, onConfirm, onReturn, addressRaw, addressPin, onAddressRawChange, onAddressPinChange, buyerName }) {
@@ -505,7 +582,8 @@ function AuthModal({ open, onClose, onAuthenticated }) {
   );
 }
 
-export default function Storefront() {
+export default function Storefront({ initialProductId = null }) {
+  const router = useRouter();
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
   const [context, setContext] = useState(null);
@@ -517,6 +595,7 @@ export default function Storefront() {
   const [selected, setSelected] = useState(null);
   const [drawer, setDrawer] = useState(null);
   const [cart, setCart] = useState([]);
+  const [cartBusy, setCartBusy] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [checkoutStep, setCheckoutStep] = useState("address");
@@ -533,8 +612,16 @@ export default function Storefront() {
   const [pendingAfterAuth, setPendingAfterAuth] = useState(null);
   const [addressRaw, setAddressRaw] = useState("");
   const [addressPin, setAddressPin] = useState("");
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [wishlist, setWishlist] = useState([]);
+  const [orders, setOrders] = useState([]);
+  const [returns, setReturns] = useState([]);
 
   useEffect(() => {
+    // Restoring the browser session is intentionally client-only; the server render
+    // always starts logged out to avoid a hydration mismatch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAuth(loadAuthSession());
     function onSessionExpired() {
       setAuth(null);
@@ -546,11 +633,15 @@ export default function Storefront() {
   }, []);
 
   useEffect(() => {
-    Promise.all([request("/storefront/products"), request("/storefront/demo-context")])
-      .then(([catalogue, demo]) => { setProducts(catalogue.items); setCategories(["All", ...catalogue.categories]); setContext(demo); })
+    Promise.all([
+      request("/storefront/products"),
+      request("/storefront/demo-context"),
+      initialProductId ? request(`/storefront/products/${initialProductId}`) : Promise.resolve(null),
+    ])
+      .then(([catalogue, demo, detail]) => { setProducts(catalogue.items); setCategories(["All", ...catalogue.categories]); setContext(demo); if (detail) setSelected(detail); })
       .catch((reason) => setError(reason.message))
       .finally(() => setLoading(false));
-  }, []);
+  }, [initialProductId]);
 
   async function refreshCart() {
     if (!auth?.user) {
@@ -578,6 +669,27 @@ export default function Storefront() {
       .catch((reason) => setToast(reason.message || "Could not load your cart"));
   }, [auth?.user]);
 
+  async function refreshAccountData() {
+    if (!auth?.user || auth.user.role !== "buyer") {
+      setWishlist([]); setOrders([]); setReturns([]);
+      return;
+    }
+    const [wishlistData, orderData, returnData] = await Promise.all([getWishlist(), listMyOrders(), listMyReturns()]);
+    setWishlist(wishlistData.items); setOrders(orderData); setReturns(returnData);
+  }
+
+  useEffect(() => {
+    if (auth?.user?.role !== "buyer") return undefined;
+    let active = true;
+    Promise.all([getWishlist(), listMyOrders(), listMyReturns()])
+      .then(([wishlistData, orderData, returnData]) => {
+        if (!active) return;
+        setWishlist(wishlistData.items); setOrders(orderData); setReturns(returnData);
+      })
+      .catch((reason) => { if (active) setToast(reason.message); });
+    return () => { active = false; };
+  }, [auth?.user]);
+
   function requireAuth(action) {
     if (auth?.user) {
       action(auth.user.id);
@@ -601,6 +713,29 @@ export default function Storefront() {
     logout();
     setAuth(null);
     setToast("Logged out");
+    setAccountMenuOpen(false);
+  }
+
+  function toggleWishlist(product) {
+    requireAuth(async () => {
+      try {
+        const wished = wishlist.some((item) => item.product.id === product.id);
+        if (wished) await removeWishlist(product.id); else await addWishlist(product.id);
+        await refreshAccountData();
+        setToast(wished ? "Removed from wishlist" : "Saved to wishlist");
+      } catch (reason) { setToast(reason.message || "Could not update wishlist"); }
+    });
+  }
+
+  async function startReturn(orderId) {
+    const reason = window.prompt("Why are you returning this order?");
+    if (!reason) return;
+    try {
+      await createReturnRequest(orderId, reason);
+      await refreshAccountData();
+      setDrawer("returns");
+      setToast("Return request created. Add evidence for Agent 8 review.");
+    } catch (reasonError) { setToast(reasonError.message || "Could not create return"); }
   }
 
   async function changeLanguage(languageCode) {
@@ -665,51 +800,63 @@ export default function Storefront() {
     }
   }
 
-  async function openProduct(product) {
+  function openProduct(product) {
     // Agents 1 (catalogue image generation) and 2 (spec extraction) run once, at
     // listing-creation time in the seller portal -- not on every buyer view. Now that
     // they call real models (SAM 2.0 / Nano Banana 2 / Stable Diffusion / Claude),
     // re-running them per page view would mean a real multi-minute wait on every
     // product click. Judges can watch the real pipeline via "Watch all 8 agents".
-    setDrawer("product");
-    setSelected(product);
-    setVoiceAudioKey(null);
-    setAgentAnswer("");
-    setSizeSaathi(null);
-    try {
-      const detail = await request(`/storefront/products/${product.id}`);
-      setSelected(detail);
-    } catch (reason) {
-      setToast(reason.message || "Could not load this product");
-    }
+    router.push(`/products/${product.id}`);
   }
 
   function addToCart(product, size) {
     const hasChart = product.size_chart && Object.keys(product.size_chart).length > 0;
     const resolvedSize = size || (hasChart ? Object.keys(product.size_chart)[0] : "Standard");
     if (hasChart && !size) {
-      setSelected(product);
-      setDrawer("product");
       setToast("Please select a size first");
+      router.push(`/products/${product.id}`);
       return;
     }
     requireAuth(async () => {
+      const variantId = variantIdFor(product, resolvedSize);
+      setCartBusy(variantId);
       try {
-        await apiAddToCart(variantIdFor(product, resolvedSize));
-        await refreshCart();
+        const response = await apiAddToCart(variantId);
+        setCart(response.items);
         setToast(`${product.name} added to cart`);
       } catch (reason) {
         setToast(reason.message || "Could not add this to your cart");
+      } finally {
+        setCartBusy(null);
       }
     });
   }
 
-  async function removeFromCart(item) {
+  async function updateCartQuantity(item, qty) {
+    if (cartBusy) return;
+    setCartBusy(item.id);
     try {
-      await removeCartItem(item.id);
-      await refreshCart();
+      const response = await updateCartItem(item.id, qty);
+      setCart(response.items);
+      setToast(qty === 0 ? `${item.product_name} removed from cart` : `Quantity updated to ${qty}`);
+    } catch (reason) {
+      setToast(reason.message || "Could not update this quantity");
+    } finally {
+      setCartBusy(null);
+    }
+  }
+
+  async function removeFromCart(item) {
+    if (cartBusy) return;
+    setCartBusy(item.id);
+    try {
+      const response = await removeCartItem(item.id);
+      setCart(response.items);
+      setToast(`${item.product_name} removed from cart`);
     } catch (reason) {
       setToast(reason.message || "Could not remove this item");
+    } finally {
+      setCartBusy(null);
     }
   }
 
@@ -856,14 +1003,51 @@ export default function Storefront() {
     }
   }
 
+  if (initialProductId) {
+    if (loading) return <div className="product-page-loading"><LoaderCircle className="spin" size={28} /><p>Loading verified product details…</p></div>;
+    if (error || !selected) return <div className="product-page-loading"><ShieldCheck size={30} /><h1>Product unavailable</h1><p>{error || "This product could not be found."}</p><button className="primary-cta" type="button" onClick={() => router.push("/")}>Return to storefront</button></div>;
+    return (
+      <>
+        <ProductPageView
+          product={selected}
+          busy={busy}
+          cart={cart}
+          cartBusy={cartBusy}
+          onBack={() => router.back()}
+          onClose={() => router.push("/")}
+          onAdd={addToCart}
+          onUpdateCart={updateCartQuantity}
+          onOpenCart={() => setDrawer("cart")}
+          onWishlist={toggleWishlist}
+          wished={wishlist.some((item) => item.product.id === selected.id)}
+          onSize={recommendSize}
+          onReview={checkReview}
+          onAsk={askQuestion}
+          onAskVoice={askVoice}
+          voiceAudioUrl={audioUrl(voiceAudioKey)}
+          agentAnswer={agentAnswer}
+          sizeSaathi={sizeSaathi ? { ...sizeSaathi, audioUrl: audioUrl(sizeSaathi.audioKey) } : null}
+          onSubmitReview={submitReview}
+        />
+        <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); setVerifiedAddress(false); setVerifiedAddressId(null); })} />
+        <CheckoutDrawer open={drawer === "checkout"} context={context} busy={busy} step={checkoutStep} verifiedAddress={verifiedAddress} orderId={lastOrderId} onClose={() => setDrawer(null)} onVerify={verifyAddress} onConfirm={confirmOrder} onReturn={checkReturn} addressRaw={addressRaw} addressPin={addressPin} onAddressRawChange={setAddressRaw} onAddressPinChange={setAddressPin} buyerName={auth?.user?.name} />
+        <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} />
+        <TrustDock trust={trust} busy={busy} onClose={() => setTrust((current) => ({ ...current, open: false }))} onRunAll={runAll} />
+        <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
+        <ReviewSummaryDialog data={reviewSummary} onClose={() => setReviewSummary(null)} />
+        {toast && <div className="toast" role="status" aria-live="polite"><Check size={16} /> {toast}</div>}
+      </>
+    );
+  }
+
   return (
     <div className="storefront">
       <header className="site-header">
         <div className="header-main">
-          <button className="mobile-menu" type="button" aria-label="Open menu"><Menu /></button>
+          <button className="mobile-menu" type="button" onClick={() => setMobileNavOpen((open) => !open)} aria-label={mobileNavOpen ? "Close menu" : "Open menu"} aria-expanded={mobileNavOpen}><Menu /></button>
           <a className="logo" href="#top"><span>K</span><div><strong>Kavach</strong><small>SAATHI SHOP</small></div></a>
           <label className="search-box"><Search size={19} /><input value={search} onChange={(event) => { setSearch(event.target.value); setVisibleCount(50); }} placeholder="Try Saree, Kurti or Search by Product Code" /><kbd>⌘ K</kbd></label>
-          <nav className="utility-nav" aria-label="Account navigation">
+          <nav className={`utility-nav ${mobileNavOpen ? "open" : ""}`} aria-label="Account navigation">
             <button type="button"><Headphones size={19} /><span>Support</span></button>
             {auth?.user ? (
               <>
@@ -872,12 +1056,18 @@ export default function Storefront() {
                     {LANGUAGE_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
                   </select>
                 </label>
-                <button type="button" onClick={handleLogout} title={auth.user.email || auth.user.phone}><CircleUserRound size={19} /><span>{auth.user.name}</span><LogOut size={14} /></button>
+                <div className="account-menu"><button type="button" onClick={() => setAccountMenuOpen((open) => !open)} aria-expanded={accountMenuOpen} title={auth.user.email || auth.user.phone}><CircleUserRound size={19} /><span>{auth.user.name}</span><ChevronDown size={14} /></button>{accountMenuOpen && <div className="account-dropdown">
+                  <button type="button" onClick={() => { setDrawer("orders"); setAccountMenuOpen(false); }}>My Orders <small>{orders.length}</small></button>
+                  <button type="button" onClick={() => { setDrawer("cart"); setAccountMenuOpen(false); }}>My Cart <small>{cart.reduce((sum, item) => sum + item.qty, 0)}</small></button>
+                  <button type="button" onClick={() => { setDrawer("wishlist"); setAccountMenuOpen(false); }}>My Wishlist <small>{wishlist.length}</small></button>
+                  <button type="button" onClick={() => { setDrawer("returns"); setAccountMenuOpen(false); }}>My Returns <small>{returns.length}</small></button>
+                  <button type="button" onClick={() => { handleLogout(); setMobileNavOpen(false); }}><LogOut size={14} /> Logout</button>
+                </div>}</div>
               </>
             ) : (
-              <button type="button" onClick={() => setAuthModalOpen(true)}><CircleUserRound size={19} /><span>Login</span></button>
+              <button type="button" onClick={() => { setAuthModalOpen(true); setMobileNavOpen(false); }}><CircleUserRound size={19} /><span>Login</span></button>
             )}
-            <button type="button" onClick={() => setDrawer("cart")}><ShoppingCart size={19} /><span>Cart</span>{cart.length > 0 && <b>{cart.reduce((sum, item) => sum + item.qty, 0)}</b>}</button>
+            <button type="button" onClick={() => { setDrawer("cart"); setMobileNavOpen(false); }}><ShoppingCart size={19} /><span>Cart</span>{cart.length > 0 && <b>{cart.reduce((sum, item) => sum + item.qty, 0)}</b>}</button>
           </nav>
         </div>
         <div className="category-nav" aria-label="Product categories">{categories.map((item) => <button className={category === item ? "active" : ""} type="button" key={item} onClick={() => { setCategory(item); setVisibleCount(50); }}>{item}<small>{item === "All" ? products.length : categoryCounts[item] || 0}</small></button>)}</div>
@@ -908,7 +1098,7 @@ export default function Storefront() {
         <section className="catalogue" id="products">
           <div className="section-heading"><div><p>{category === "All" ? "ALL 10 CATEGORIES REPRESENTED" : category.toUpperCase()}</p><h2>Products worth discovering</h2></div><span>Showing {displayedProducts.length} of {visibleProducts.length} products · {category === "All" ? "50 available in every category" : "Full category catalogue"}</span></div>
           {error && <div className="error-state"><ShieldCheck /><p><strong>Storefront API is unavailable.</strong>{error}</p></div>}
-          {loading ? <div className="loading-grid">{Array.from({ length: 10 }, (_, index) => <div key={index}></div>)}</div> : <><div className="product-grid">{displayedProducts.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} onAdd={addToCart} />)}</div>{displayedProducts.length < visibleProducts.length && <button className="load-more" type="button" onClick={() => setVisibleCount((count) => count + 50)}>Load 50 more products <ChevronRight size={16} /></button>}</>}
+          {loading ? <div className="loading-grid">{Array.from({ length: 10 }, (_, index) => <div key={index}></div>)}</div> : <><div className="product-grid">{displayedProducts.map((product) => <ProductCard key={product.id} product={product} onOpen={openProduct} onAdd={addToCart} onWishlist={toggleWishlist} wished={wishlist.some((item) => item.product.id === product.id)} pending={cartBusy === variantIdFor(product, "Standard")} />)}</div>{displayedProducts.length < visibleProducts.length && <button className="load-more" type="button" onClick={() => setVisibleCount((count) => count + 50)}>Load 50 more products <ChevronRight size={16} /></button>}</>}
         </section>
 
         <section className="safety-story">
@@ -921,12 +1111,12 @@ export default function Storefront() {
 
       <button className="floating-saathi" type="button" onClick={() => setTrust((current) => ({ ...current, open: !current.open }))}><ShieldCheck size={20} /><span><strong>Kavach Saathi</strong><small>{busy ? "Agents working…" : `${Object.keys(trust.results).length}/8 checks visible`}</small></span></button>
       <TrustDock trust={trust} busy={busy} onClose={() => setTrust((current) => ({ ...current, open: false }))} onRunAll={runAll} />
-      <ProductDrawer product={selected} open={drawer === "product"} busy={busy} onClose={() => setDrawer(null)} onAdd={addToCart} onSize={recommendSize} onReview={checkReview} onAsk={askQuestion} onAskVoice={askVoice} voiceAudioUrl={audioUrl(voiceAudioKey)} agentAnswer={agentAnswer} sizeSaathi={sizeSaathi ? { ...sizeSaathi, audioUrl: audioUrl(sizeSaathi.audioKey) } : null} onSubmitReview={submitReview} />
-      <CartDrawer items={cart} open={drawer === "cart"} onClose={() => setDrawer(null)} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); setVerifiedAddress(false); setVerifiedAddressId(null); })} />
+      <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); setVerifiedAddress(false); setVerifiedAddressId(null); })} />
       <CheckoutDrawer open={drawer === "checkout"} context={context} busy={busy} step={checkoutStep} verifiedAddress={verifiedAddress} orderId={lastOrderId} onClose={() => setDrawer(null)} onVerify={verifyAddress} onConfirm={confirmOrder} onReturn={checkReturn} addressRaw={addressRaw} addressPin={addressPin} onAddressRawChange={setAddressRaw} onAddressPinChange={setAddressPin} buyerName={auth?.user?.name} />
+      <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} />
       <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
       <ReviewSummaryDialog data={reviewSummary} onClose={() => setReviewSummary(null)} />
-      {toast && <div className="toast" role="status"><Check size={16} /> {toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite"><Check size={16} /> {toast}</div>}
     </div>
   );
 }

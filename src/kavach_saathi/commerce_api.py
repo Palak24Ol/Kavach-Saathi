@@ -19,8 +19,10 @@ from kavach_saathi.db.models import (
     Payment,
     Product,
     ProductVariant,
+    ReturnRecord,
     Review,
     User,
+    WishlistItem,
 )
 from kavach_saathi.events import ORDER_PLACED_STREAM, REVIEW_SUBMITTED_STREAM, publish_event
 from kavach_saathi.models import (
@@ -28,6 +30,7 @@ from kavach_saathi.models import (
     CartItemUpdate,
     OrderCreateRequest,
     PaymentVerifyRequest,
+    ReturnCreateRequest,
     ReviewCreateRequest,
 )
 from kavach_saathi.order_status import OrderStatus
@@ -35,6 +38,19 @@ from kavach_saathi.providers.razorpay_provider import RazorpayClient, RazorpayUn
 
 router = APIRouter()
 _require_buyer = require_role("buyer")
+
+
+def _product_summary(product: Product) -> dict:
+    return {
+        "id": product.id,
+        "name": product.title,
+        "brand": product.brand,
+        "price": product.price,
+        "original_price": product.original_price,
+        "image_url": product.media_primary,
+        "stock": product.stock,
+        "size_chart": product.size_chart,
+    }
 
 
 def _cart_item_out(item: CartItem, variant: ProductVariant, product: Product) -> dict:
@@ -86,8 +102,13 @@ async def add_to_cart(
             CartItem.user_id == user.id, CartItem.product_variant_id == payload.product_variant_id
         )
     ).scalars().first()
+    requested_qty = payload.qty + (existing.qty if existing else 0)
+    if requested_qty > 10:
+        raise HTTPException(status_code=409, detail="A maximum of 10 units is allowed per cart item")
+    if requested_qty > variant.stock_qty:
+        raise HTTPException(status_code=409, detail=f"Only {variant.stock_qty} units are currently available")
     if existing:
-        existing.qty = min(20, existing.qty + payload.qty)
+        existing.qty = requested_qty
     else:
         session.add(CartItem(user_id=user.id, product_variant_id=payload.product_variant_id, qty=payload.qty))
     session.flush()
@@ -104,6 +125,15 @@ async def update_cart_item(
     item = session.get(CartItem, item_id)
     if not item or item.user_id != user.id:
         raise HTTPException(status_code=404, detail="Cart item not found")
+    if payload.qty == 0:
+        session.delete(item)
+        session.flush()
+        return {"items": _load_cart(session, user.id)}
+    variant = session.get(ProductVariant, item.product_variant_id)
+    if not variant:
+        raise HTTPException(status_code=404, detail="Product variant not found")
+    if payload.qty > variant.stock_qty:
+        raise HTTPException(status_code=409, detail=f"Only {variant.stock_qty} units are currently available")
     item.qty = payload.qty
     session.flush()
     return {"items": _load_cart(session, user.id)}
@@ -121,6 +151,45 @@ async def remove_cart_item(
     session.delete(item)
     session.flush()
     return {"items": _load_cart(session, user.id)}
+
+
+@router.get("/wishlist")
+async def list_wishlist(user: Annotated[User, Depends(_require_buyer)], session: Session = Depends(get_session)):
+    rows = session.execute(
+        select(WishlistItem).where(WishlistItem.user_id == user.id).order_by(WishlistItem.created_at.desc())
+    ).scalars().all()
+    items = []
+    for row in rows:
+        product = session.get(Product, row.product_id)
+        if product:
+            items.append({"id": row.id, "created_at": row.created_at, "product": _product_summary(product)})
+    return {"items": items}
+
+
+@router.post("/wishlist/{product_id}", status_code=201)
+async def add_wishlist(product_id: str, user: Annotated[User, Depends(_require_buyer)], session: Session = Depends(get_session)):
+    product = session.get(Product, product_id)
+    if not product or product.status != "active":
+        raise HTTPException(status_code=404, detail="Product not found")
+    item = session.execute(select(WishlistItem).where(
+        WishlistItem.user_id == user.id, WishlistItem.product_id == product_id
+    )).scalars().first()
+    if item is None:
+        item = WishlistItem(user_id=user.id, product_id=product_id)
+        session.add(item)
+        session.flush()
+    return {"id": item.id, "product": _product_summary(product)}
+
+
+@router.delete("/wishlist/{product_id}")
+async def remove_wishlist(product_id: str, user: Annotated[User, Depends(_require_buyer)], session: Session = Depends(get_session)):
+    item = session.execute(select(WishlistItem).where(
+        WishlistItem.user_id == user.id, WishlistItem.product_id == product_id
+    )).scalars().first()
+    if item:
+        session.delete(item)
+        session.flush()
+    return {"removed": bool(item), "product_id": product_id}
 
 
 @router.post("/orders", status_code=201)
@@ -284,12 +353,45 @@ async def list_my_orders(user: Annotated[User, Depends(_require_buyer)], session
             "payment_mode": order.payment_mode,
             "created_at": order.created_at,
             "items": [
-                {"product_id": i.product_id, "size": i.size, "qty": i.qty, "price_at_purchase": i.price_at_purchase}
+                {"product_id": i.product_id, "product_name": session.get(Product, i.product_id).title,
+                 "image_url": session.get(Product, i.product_id).media_primary,
+                 "size": i.size, "qty": i.qty, "price_at_purchase": i.price_at_purchase}
                 for i in items_by_order.get(order.id, [])
             ],
         }
         for order in orders
     ]
+
+
+@router.get("/returns")
+async def list_my_returns(user: Annotated[User, Depends(_require_buyer)], session: Session = Depends(get_session)):
+    rows = session.execute(
+        select(ReturnRecord).where(ReturnRecord.buyer_id == user.id).order_by(ReturnRecord.created_at.desc())
+    ).scalars().all()
+    return [{"id": row.id, "order_id": row.order_id, "reason": row.reason,
+             "status": row.decision or "pending_evidence", "decision": row.decision,
+             "confidence_score": row.confidence_score, "created_at": row.created_at} for row in rows]
+
+
+@router.post("/returns", status_code=201)
+async def create_return_request(payload: ReturnCreateRequest, user: Annotated[User, Depends(_require_buyer)], session: Session = Depends(get_session)):
+    order = session.get(Order, payload.order_id)
+    if not order or order.buyer_id != user.id:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.status != OrderStatus.DELIVERED:
+        raise HTTPException(status_code=409, detail="Returns can only be requested after delivery")
+    existing = session.execute(select(ReturnRecord).where(ReturnRecord.order_id == order.id)).scalars().first()
+    if existing:
+        raise HTTPException(status_code=409, detail="A return already exists for this order")
+    record = ReturnRecord(
+        id=f"RT-{uuid4().hex[:10].upper()}", order_id=order.id, buyer_id=user.id,
+        reason=payload.reason, decision=None,
+    )
+    session.add(record)
+    order.status = OrderStatus.RETURN_INITIATED
+    session.add(OrderStatusHistory(order_id=order.id, status=OrderStatus.RETURN_INITIATED, actor="user"))
+    session.flush()
+    return {"id": record.id, "order_id": record.order_id, "reason": record.reason, "status": "pending_evidence"}
 
 
 @router.post("/reviews", status_code=201)

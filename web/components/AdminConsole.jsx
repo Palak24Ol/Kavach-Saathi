@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 import { get, loadAuthSession, login, logout, patchJson, post, saveAuthSession } from "@/lib/api";
 
@@ -39,7 +40,7 @@ function AdminAuth({ onAuthenticated }) {
   }
 
   return (
-    <div className="seller-auth-shell">
+    <div className="seller-auth-page"><header className="portal-public-header"><Link className="logo" href="/"><span>K</span><div><strong>Kavach</strong><small>SAATHI SHOP</small></div></Link><nav><Link href="/">Home</Link><Link href="/#products">Shop</Link><span>Admin Console</span></nav></header><main className="seller-auth-shell">
       <div className="seller-auth-card">
         <div className="seller-brand"><ShieldAlert size={22} /><div><strong>Kavach Saathi</strong><small>Admin Console</small></div></div>
         <form className="auth-form" onSubmit={handleSubmit}>
@@ -49,7 +50,7 @@ function AdminAuth({ onAuthenticated }) {
           <button className="primary-cta wide" type="submit" disabled={busy}>{busy ? <LoaderCircle className="spin" size={16} /> : null} Log in</button>
         </form>
       </div>
-    </div>
+    </main><footer className="portal-public-footer"><strong>Kavach Saathi</strong><span>Protected marketplace administration</span><Link href="/">Return to storefront</Link></footer></div>
   );
 }
 
@@ -80,7 +81,7 @@ function DashboardTab({ analytics, onRecompute, busy }) {
   );
 }
 
-function InspectionQueueTab({ queue, onResolve }) {
+function InspectionQueueTab({ queue, onResolve, resolving }) {
   return (
     <div className="seller-panel">
       {!queue.length && <p className="empty-note">No returns are waiting on manual inspection right now.</p>}
@@ -92,8 +93,8 @@ function InspectionQueueTab({ queue, onResolve }) {
           </div>
           <p>Order {item.order_id} · buyer {item.buyer_id}</p>
           <div className="order-actions">
-            <button type="button" onClick={() => onResolve(item.return_id, "approve")}>Approve return</button>
-            <button type="button" onClick={() => onResolve(item.return_id, "reject")}>Reject return</button>
+            <button type="button" disabled={resolving === item.return_id} onClick={() => onResolve(item.return_id, "approve")}>{resolving === item.return_id ? <LoaderCircle className="spin" size={13} /> : null} Approve return</button>
+            <button type="button" disabled={resolving === item.return_id} onClick={() => onResolve(item.return_id, "reject")}>{resolving === item.return_id ? <LoaderCircle className="spin" size={13} /> : null} Reject return</button>
           </div>
         </article>
       ))}
@@ -165,6 +166,7 @@ export default function AdminConsole() {
   const [fraud, setFraud] = useState(null);
   const [toast, setToast] = useState("");
   const [recomputing, setRecomputing] = useState(false);
+  const [resolving, setResolving] = useState("");
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -200,12 +202,15 @@ export default function AdminConsole() {
   }
 
   async function resolveReturn(returnId, decision) {
+    setResolving(returnId);
     try {
       await post(`/admin/returns/${returnId}/resolve`, { decision });
       await refreshAll();
       setToast(`Return ${returnId} ${decision}d`);
     } catch (reason) {
       setToast(reason.message);
+    } finally {
+      setResolving("");
     }
   }
 
@@ -251,11 +256,11 @@ export default function AdminConsole() {
       </nav>
       <main className="seller-main">
         {tab === "dashboard" && <DashboardTab analytics={analytics} onRecompute={recomputeAll} busy={recomputing} />}
-        {tab === "inspection" && <InspectionQueueTab queue={queue} onResolve={resolveReturn} />}
+        {tab === "inspection" && <InspectionQueueTab queue={queue} onResolve={resolveReturn} resolving={resolving} />}
         {tab === "fraud" && <FraudTab fraud={fraud} />}
         {tab === "trust" && <TrustOverrideTab onOverride={overrideTrustScore} toast={toast} />}
       </main>
-      {toast && <div className="toast" role="status"><ShieldCheck size={16} /> {toast}</div>}
+      {toast && <div className="toast" role="status" aria-live="polite"><ShieldCheck size={16} /> {toast}</div>}
     </div>
   );
 }
