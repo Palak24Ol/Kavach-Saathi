@@ -4,7 +4,9 @@ import time
 
 from kavach_saathi.agent_logging import log_agent_call
 from kavach_saathi.agents.base import Agent
+from kavach_saathi.config import get_settings
 from kavach_saathi.db.base import SessionLocal
+from kavach_saathi.media_storage import read_image_bytes
 from kavach_saathi.models import (
     AgentAction,
     AgentName,
@@ -13,32 +15,50 @@ from kavach_saathi.models import (
     ListingAnalyzeRequest,
     RunStatus,
 )
+from kavach_saathi.providers.image_quality import ImageQualityAssessor
+from kavach_saathi.providers.stolen_photo import GoogleVisionReverseImageSearch, GoogleVisionUnavailable
 
 
 class CatalogueTruthAgent(Agent):
+    """Agent 1: Catalogue Truth Guardian (final target plan.md Section 6). Image
+    generation (SAM 2.0 -> Nano Banana 2 -> Stable Diffusion fallback) was already
+    real as of Sub-phase 3; this rewrite closes the remaining gap where "image
+    quality" and the stolen-photo check still read a `ground_truth` fixture field
+    that no longer even exists on the Postgres `products` table (Sub-phase 0 moved
+    it to `eval_fixtures`), so both were silently returning constant values
+    regardless of the uploaded photo. Bypasses `context.media`/`context.external`
+    and instantiates its own providers directly, matching the pattern used by
+    Agents 3/5/6/7/8.
+    """
+
+    def __init__(self, context):
+        super().__init__(context)
+        self.quality_assessor = ImageQualityAssessor()
+        self.stolen_photo = GoogleVisionReverseImageSearch(get_settings())
+
     async def run(self, request: ListingAnalyzeRequest) -> AgentResult:
         started_at = time.perf_counter()
+        settings = get_settings()
         product = self.context.repository.get("products", request.product_id)
-        ground_truth = product.get("ground_truth", {}).get("catalogue", {})
-        analysis = await self.context.media.analyze_images(
-            request.image_keys,
-            "Assess product visibility, blur, obstruction and suitability for a catalog.",
-            ground_truth,
-        )
-        reverse = await self.context.external.reverse_image_search(
-            request.image_keys[0],
-            {
-                "full_matches": ground_truth.get("full_matches", []),
-                "partial_matches": ground_truth.get("partial_matches", []),
-                "pages": ground_truth.get("pages", []),
-            },
-        )
+
+        primary_image = await read_image_bytes(request.image_keys[0], settings)
+        quality_result = self.quality_assessor.assess(primary_image)
+
+        reverse_error: str | None = None
+        try:
+            reverse = await self.stolen_photo.search(primary_image)
+        except GoogleVisionUnavailable as exc:
+            reverse_error = str(exc)
+            reverse = {"full_matches": [], "partial_matches": [], "pages": []}
+
         generated = await self.context.media.generate_catalog_views(request.image_keys, product)
         self.context.repository.save_generated_images(product["id"], generated)
 
-        copied = bool(reverse.get("full_matches"))
+        # Honest degrade: with no stolen-photo check actually run, this can only ever
+        # report "not flagged" (never a false accusation) -- never "match found".
+        copied = bool(reverse.get("full_matches")) and not reverse_error
         self.context.repository.set_stolen_photo_flag(product["id"], copied)
-        quality = float(analysis.get("quality", 0.8))
+        quality = float(quality_result["quality"])
         confidence = round(min(99, 55 + quality * 40))
         status = RunStatus.MANUAL_REVIEW if copied else RunStatus.COMPLETED
         summary = (
@@ -59,8 +79,13 @@ class CatalogueTruthAgent(Agent):
             confidence=confidence,
             summary=summary,
             evidence=[
-                Evidence(key="image_quality", value=quality, source="nova_vision"),
-                Evidence(key="web_matches", value=reverse, source="google_vision_web_detection"),
+                Evidence(key="image_quality", value=quality_result, source="opencv_blur_resolution_brightness"),
+                Evidence(
+                    key="web_matches",
+                    value=reverse,
+                    source="google_vision_web_detection" if not reverse_error else "unavailable",
+                ),
+                Evidence(key="reverse_search_error", value=reverse_error, source="fallback_policy"),
                 Evidence(key="generated_views", value=generated, source="/".join(providers_used)),
             ],
             actions=actions,
