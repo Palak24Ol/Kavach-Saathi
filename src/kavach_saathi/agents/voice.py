@@ -106,18 +106,18 @@ class VoiceQAAgent(Agent):
         )
 
         grounded_products = [
-                {
-                    "id": p["id"],
-                    "name": p["name"],
-                    "price": p["price"],
-                    "specs": p.get("specs", {}),
-                    "specifications": p.get("specifications", []),
-                    "size_chart_cm": p.get("size_chart", {}),
-                    "return_window_days": p.get("return_window_days", 7),
-                    "seller": sellers[p["seller_id"]],
-                }
-                for p in products
-            ]
+            {
+                "id": p["id"],
+                "name": p["name"],
+                "price": p["price"],
+                "specs": p.get("specs", {}),
+                "specifications": p.get("specifications", []),
+                "size_chart_cm": p.get("size_chart", {}),
+                "return_window_days": p.get("return_window_days", 7),
+                "seller": sellers[p["seller_id"]],
+            }
+            for p in products
+        ]
         grounded = {
             "question": transcript,
             "products": grounded_products,
@@ -138,18 +138,23 @@ class VoiceQAAgent(Agent):
             # each group answer and the complete ID list so nothing is silently cut.
             partial_answers = []
             for start in range(0, len(grounded_products), 20):
-                chunk = grounded_products[start:start + 20]
+                chunk = grounded_products[start : start + 20]
                 partial = await self.context.reasoner.structured(
                     system=_SYSTEM_PROMPT,
-                    prompt=f"Compare this complete subset for: {transcript}\nProducts: {json.dumps(chunk, ensure_ascii=False, default=str)}",
+                    prompt=(
+                        f"Compare this complete subset for: {transcript}\nProducts: "
+                        f"{json.dumps(chunk, ensure_ascii=False, default=str)}"
+                    ),
                     schema=VoiceAnswer,
                     reasoning_effort="low",
                 )
                 partial_answers.append(partial.model_dump())
             answer = await self.context.reasoner.structured(
                 system=_SYSTEM_PROMPT,
-                prompt=(f"Synthesize the category-wide comparison for: {transcript}\n"
-                        f"All product IDs: {product_ids}\nSubset answers: {json.dumps(partial_answers, ensure_ascii=False)}"),
+                prompt=(
+                    f"Synthesize the category-wide comparison for: {transcript}\n"
+                    f"All product IDs: {product_ids}\nSubset answers: {json.dumps(partial_answers, ensure_ascii=False)}"
+                ),
                 schema=VoiceAnswer,
                 reasoning_effort="low",
             )
@@ -182,9 +187,11 @@ class VoiceQAAgent(Agent):
             lines["en"] = [f"{p['name']}: Rs {p['price']}" for p in products]
             joined = {code: "; ".join(items) for code, items in lines.items()}
             comparable_details = " | ".join(
-                f"{product['name']}: " + ", ".join(
+                f"{product['name']}: "
+                + ", ".join(
                     f"{item['label']}={item['value']}{(' ' + item['unit']) if item.get('unit') else ''}"
-                    for item in product.get("specifications", []) if item.get("comparable", True)
+                    for item in product.get("specifications", [])
+                    if item.get("comparable", True)
                 )
                 for product in products
             )
@@ -232,9 +239,7 @@ class VoiceQAAgent(Agent):
         else:
             try:
                 audio_bytes = await read_image_bytes(request.audio_key or "", settings)
-                content_type = _AUDIO_CONTENT_TYPES.get(
-                    Path(request.audio_key or "").suffix.lower(), "audio/wav"
-                )
+                content_type = _AUDIO_CONTENT_TYPES.get(Path(request.audio_key or "").suffix.lower(), "audio/wav")
                 transcript = await self.sarvam.transcribe(audio_bytes, request.language, content_type=content_type)
                 transcript_source = "sarvam_stt"
             except (SarvamUnavailable, FileNotFoundError):
@@ -252,7 +257,9 @@ class VoiceQAAgent(Agent):
         if size_result:
             # size_result may predate this fix and only carry en/hi -- fall back to
             # English for the newer language codes rather than crash on a missing key.
-            answers = {code: size_result.user_message.get(code, size_result.user_message["en"]) for code in _LANGUAGE_CODES}
+            answers = {
+                code: size_result.user_message.get(code, size_result.user_message["en"]) for code in _LANGUAGE_CODES
+            }
             confidence = size_result.confidence
             retrieved: dict = {}
             provider = "size_translator_handoff"

@@ -79,6 +79,7 @@ class Container:
             media=media,
             external=external,
         )
+        self.address_agent = AddressGuardianAgent(context)
         graphs = AgentGraphs(
             catalogue=CatalogueTruthAgent(context),
             specs=SpecEnforcerAgent(context),
@@ -86,7 +87,7 @@ class Container:
             review=ReviewFilterAgent(context),
             review_summary=ReviewSummaryAgent(context),
             voice=VoiceQAAgent(context),
-            address=AddressGuardianAgent(context),
+            address=self.address_agent,
             confirmation=DeliveryConfirmationAgent(context),
             returns=ReturnVerifierAgent(context),
         )

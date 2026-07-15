@@ -101,9 +101,11 @@ async def list_seller_products(
     user: Annotated[User, Depends(_require_seller)],
     session: Session = Depends(get_session),
 ):
-    products = session.execute(
-        select(Product).where(Product.seller_id == user.id).order_by(Product.created_at.desc())
-    ).scalars().all()
+    products = (
+        session.execute(select(Product).where(Product.seller_id == user.id).order_by(Product.created_at.desc()))
+        .scalars()
+        .all()
+    )
     variants_by_product: dict[str, list[ProductVariant]] = {}
     for variant in session.execute(
         select(ProductVariant).where(ProductVariant.product_id.in_([p.id for p in products]))
@@ -111,9 +113,9 @@ async def list_seller_products(
         variants_by_product.setdefault(variant.product_id, []).append(variant)
     specs_by_product: dict[str, list[ProductSpecification]] = {}
     if products:
-        for spec in session.execute(select(ProductSpecification).where(
-            ProductSpecification.product_id.in_([p.id for p in products])
-        )).scalars():
+        for spec in session.execute(
+            select(ProductSpecification).where(ProductSpecification.product_id.in_([p.id for p in products]))
+        ).scalars():
             specs_by_product.setdefault(spec.product_id, []).append(spec)
     return [
         {
@@ -124,7 +126,10 @@ async def list_seller_products(
             "price": product.price,
             "spec_source": product.spec_source,
             "stolen_photo_flag": product.stolen_photo_flag,
-            "specifications": [{"key": s.key, "label": s.label, "value": s.value_json, "unit": s.unit} for s in specs_by_product.get(product.id, [])],
+            "specifications": [
+                {"key": s.key, "label": s.label, "value": s.value_json, "unit": s.unit}
+                for s in specs_by_product.get(product.id, [])
+            ],
             "size_chart": product.size_chart,
             "variants": [
                 {"id": v.id, "size": v.size, "stock_qty": v.stock_qty, "price": v.price}
@@ -168,28 +173,55 @@ async def create_seller_product(
     session.add(product)
     session.flush()
     for item in payload.specifications:
-        session.add(ProductSpecification(
-            product_id=product_id, key=item.key, label=item.label, value_json=item.value,
-            value_type=item.value_type, unit=item.unit, comparison_group=item.comparison_group,
-            comparable=item.comparable, source="seller_form", verified=False,
-        ))
+        session.add(
+            ProductSpecification(
+                product_id=product_id,
+                key=item.key,
+                label=item.label,
+                value_json=item.value,
+                value_type=item.value_type,
+                unit=item.unit,
+                comparison_group=item.comparison_group,
+                comparable=item.comparable,
+                source="seller_form",
+                verified=False,
+            )
+        )
     for angle in ("front", "back", "left", "right"):
-        session.add(ProductImage(
-            id=f"{product_id}-{angle}", product_id=product_id, url=payload.image_keys[0],
-            type="seller_upload", angle=angle, is_verified=False,
-        ))
+        session.add(
+            ProductImage(
+                id=f"{product_id}-{angle}",
+                product_id=product_id,
+                url=payload.image_keys[0],
+                type="seller_upload",
+                angle=angle,
+                is_verified=False,
+            )
+        )
     if payload.size_chart:
         for row in payload.size_chart:
             variant_id = f"{product_id}-{row.size}"
-            session.add(ProductVariant(
-                id=variant_id, product_id=product_id, size=row.size, sku=variant_id,
-                stock_qty=row.stock_qty, price=row.price or payload.price,
-            ))
+            session.add(
+                ProductVariant(
+                    id=variant_id,
+                    product_id=product_id,
+                    size=row.size,
+                    sku=variant_id,
+                    stock_qty=row.stock_qty,
+                    price=row.price or payload.price,
+                )
+            )
     else:
-        session.add(ProductVariant(
-            id=f"{product_id}-STD", product_id=product_id, size="Standard",
-            sku=f"{product_id}-STD", stock_qty=payload.stock_qty, price=payload.price,
-        ))
+        session.add(
+            ProductVariant(
+                id=f"{product_id}-STD",
+                product_id=product_id,
+                size="Standard",
+                sku=f"{product_id}-STD",
+                stock_qty=payload.stock_qty,
+                price=payload.price,
+            )
+        )
     session.flush()
     return {
         "id": product.id,
@@ -259,8 +291,7 @@ async def list_seller_orders(
     items = session.execute(select(OrderItem).where(OrderItem.seller_id == user.id)).scalars().all()
     order_ids = list({item.order_id for item in items})
     orders_by_id = {
-        order.id: order
-        for order in session.execute(select(Order).where(Order.id.in_(order_ids))).scalars()
+        order.id: order for order in session.execute(select(Order).where(Order.id.in_(order_ids))).scalars()
     }
     return [
         {
@@ -282,9 +313,11 @@ async def update_seller_order_status(
     user: Annotated[User, Depends(_require_seller)],
     session: Session = Depends(get_session),
 ):
-    owns_item = session.execute(
-        select(OrderItem).where(OrderItem.order_id == order_id, OrderItem.seller_id == user.id)
-    ).scalars().first()
+    owns_item = (
+        session.execute(select(OrderItem).where(OrderItem.order_id == order_id, OrderItem.seller_id == user.id))
+        .scalars()
+        .first()
+    )
     if not owns_item:
         raise HTTPException(status_code=404, detail="Order not found for this seller")
     order = session.get(Order, order_id)

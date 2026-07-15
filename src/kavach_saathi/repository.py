@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select, update
@@ -11,6 +12,7 @@ from kavach_saathi.db.models import (
     Address,
     Order,
     OrderItem,
+    OtpSession,
     Product,
     ProductImage,
     ProductSpecification,
@@ -87,21 +89,39 @@ def _product_dict(product: Product) -> dict[str, Any]:
 
 def _normalized_spec(row: ProductSpecification) -> dict[str, Any]:
     aliases = {
-        "garment_length": "length", "product_length": "length", "length_cm": "length",
-        "chest_cm": "chest", "bust": "chest", "waist_cm": "waist",
-        "fabric_composition": "fabric", "material_composition": "fabric",
+        "garment_length": "length",
+        "product_length": "length",
+        "length_cm": "length",
+        "chest_cm": "chest",
+        "bust": "chest",
+        "waist_cm": "waist",
+        "fabric_composition": "fabric",
+        "material_composition": "fabric",
     }
     normalized_key = aliases.get(row.key, row.key.removesuffix("_cm"))
     value, unit = row.value_json, row.unit
     if isinstance(value, (int, float)) and unit:
         unit_key = unit.casefold()
-        if unit_key == "mm": value, unit = value / 10, "cm"
-        elif unit_key in {"m", "meter", "metre"}: value, unit = value * 100, "cm"
-        elif unit_key in {"in", "inch", "inches"}: value, unit = round(value * 2.54, 2), "cm"
-    return {"key": row.key, "normalized_key": normalized_key, "label": row.label,
-            "value": row.value_json, "normalized_value": value, "value_type": row.value_type,
-            "unit": row.unit, "normalized_unit": unit, "comparison_group": row.comparison_group,
-            "comparable": row.comparable, "source": row.source, "verified": row.verified}
+        if unit_key == "mm":
+            value, unit = value / 10, "cm"
+        elif unit_key in {"m", "meter", "metre"}:
+            value, unit = value * 100, "cm"
+        elif unit_key in {"in", "inch", "inches"}:
+            value, unit = round(value * 2.54, 2), "cm"
+    return {
+        "key": row.key,
+        "normalized_key": normalized_key,
+        "label": row.label,
+        "value": row.value_json,
+        "normalized_value": value,
+        "value_type": row.value_type,
+        "unit": row.unit,
+        "normalized_unit": unit,
+        "comparison_group": row.comparison_group,
+        "comparable": row.comparable,
+        "source": row.source,
+        "verified": row.verified,
+    }
 
 
 def _order_dict(order: Order, item: OrderItem | None) -> dict[str, Any]:
@@ -219,9 +239,7 @@ class CommerceRepository:
                 order = session.get(Order, record_id)
                 if not order:
                     raise DataNotFoundError(f"orders:{record_id} not found")
-                item = session.execute(
-                    select(OrderItem).where(OrderItem.order_id == order.id)
-                ).scalars().first()
+                item = session.execute(select(OrderItem).where(OrderItem.order_id == order.id)).scalars().first()
                 return _order_dict(order, item)
             if collection == "reviews":
                 review = session.get(Review, record_id)
@@ -249,9 +267,7 @@ class CommerceRepository:
                 rows = session.execute(select(SellerProfile).order_by(SellerProfile.user_id)).scalars()
                 return [_seller_dict(p) for p in rows]
             if collection == "buyers":
-                users = session.execute(
-                    select(User).where(User.role == "buyer").order_by(User.id)
-                ).scalars()
+                users = session.execute(select(User).where(User.role == "buyer").order_by(User.id)).scalars()
                 return [_buyer_dict(u) for u in users]
             if collection == "orders":
                 items_by_order: dict[str, OrderItem] = {}
@@ -323,7 +339,8 @@ class CommerceRepository:
     def product_specifications(self, product_id: str) -> list[dict[str, Any]]:
         with self._session() as session:
             rows = session.execute(
-                select(ProductSpecification).where(ProductSpecification.product_id == product_id)
+                select(ProductSpecification)
+                .where(ProductSpecification.product_id == product_id)
                 .order_by(ProductSpecification.comparison_group, ProductSpecification.label)
             ).scalars()
             return [_normalized_spec(row) for row in rows]
@@ -332,10 +349,12 @@ class CommerceRepository:
         with self._session() as session:
             product = session.get(Product, product_id)
             rows = session.execute(
-                select(ProductImage).where(
+                select(ProductImage)
+                .where(
                     ProductImage.product_id == product_id,
                     ProductImage.angle.in_(("front", "back", "left", "right")),
-                ).order_by(ProductImage.is_verified.desc(), ProductImage.created_at.desc())
+                )
+                .order_by(ProductImage.is_verified.desc(), ProductImage.created_at.desc())
             ).scalars()
             by_angle: dict[str, dict[str, Any]] = {}
             for row in rows:
@@ -348,7 +367,9 @@ class CommerceRepository:
     def comparison_products(self, question: str, primary_id: str, explicit_ids: list[str]) -> list[dict[str, Any]]:
         query = question.casefold()
         with self._session() as session:
-            active = session.execute(select(Product).where(Product.status == "active").order_by(Product.id)).scalars().all()
+            active = (
+                session.execute(select(Product).where(Product.status == "active").order_by(Product.id)).scalars().all()
+            )
             primary = session.get(Product, primary_id)
             selected: list[Product] = [primary] if primary else []
             by_id = {product.id: product for product in active}
@@ -357,12 +378,19 @@ class CommerceRepository:
                 if product and product not in selected:
                     selected.append(product)
             aliases = {
-                "kurta": "Kurti, Saree & Lehenga", "kurti": "Kurti, Saree & Lehenga",
-                "saree": "Kurti, Saree & Lehenga", "lehenga": "Kurti, Saree & Lehenga",
-                "men": "Men", "kids": "Kids & Toys", "beauty": "Beauty & Health",
-                "jewellery": "Jewellery & Accessories", "jewelry": "Jewellery & Accessories",
-                "bags": "Bags & Footwear", "footwear": "Bags & Footwear",
-                "home": "Home & Kitchen", "western": "Women Western",
+                "kurta": "Kurti, Saree & Lehenga",
+                "kurti": "Kurti, Saree & Lehenga",
+                "saree": "Kurti, Saree & Lehenga",
+                "lehenga": "Kurti, Saree & Lehenga",
+                "men": "Men",
+                "kids": "Kids & Toys",
+                "beauty": "Beauty & Health",
+                "jewellery": "Jewellery & Accessories",
+                "jewelry": "Jewellery & Accessories",
+                "bags": "Bags & Footwear",
+                "footwear": "Bags & Footwear",
+                "home": "Home & Kitchen",
+                "western": "Women Western",
             }
             category = next((value for key, value in aliases.items() if key in query), None)
             wants_all = any(token in query for token in ("all ", "sab ", "saare ", "every "))
@@ -370,25 +398,25 @@ class CommerceRepository:
                 selected = [product for product in active if product.category == category]
             else:
                 for product in active:
-                    if (product.id.casefold() in query
+                    if (
+                        product.id.casefold() in query
                         or product.title.casefold() in query
-                        or (product.brand and product.brand.casefold() in query)) and product not in selected:
+                        or (product.brand and product.brand.casefold() in query)
+                    ) and product not in selected:
                         selected.append(product)
             output = []
             for product in selected:
                 item = _product_dict(product)
-                rows = session.execute(select(ProductSpecification).where(
-                    ProductSpecification.product_id == product.id
-                )).scalars()
+                rows = session.execute(
+                    select(ProductSpecification).where(ProductSpecification.product_id == product.id)
+                ).scalars()
                 item["specifications"] = [_normalized_spec(row) for row in rows]
                 output.append(item)
             return output
 
     def return_for_order(self, order_id: str) -> dict[str, Any] | None:
         with self._session() as session:
-            record = session.execute(
-                select(ReturnRecord).where(ReturnRecord.order_id == order_id)
-            ).scalars().first()
+            record = session.execute(select(ReturnRecord).where(ReturnRecord.order_id == order_id)).scalars().first()
             return _return_dict(record) if record else None
 
     def summary(self) -> dict[str, int]:
@@ -398,9 +426,7 @@ class CommerceRepository:
             counts = {}
             counts["products"] = session.scalar(select(func.count()).select_from(Product)) or 0
             counts["sellers"] = session.scalar(select(func.count()).select_from(SellerProfile)) or 0
-            counts["buyers"] = session.scalar(
-                select(func.count()).select_from(User).where(User.role == "buyer")
-            ) or 0
+            counts["buyers"] = session.scalar(select(func.count()).select_from(User).where(User.role == "buyer")) or 0
             counts["orders"] = session.scalar(select(func.count()).select_from(Order)) or 0
             counts["reviews"] = session.scalar(select(func.count()).select_from(Review)) or 0
             counts["addresses"] = session.scalar(select(func.count()).select_from(Address)) or 0
@@ -462,18 +488,28 @@ class CommerceRepository:
         latitude: float,
         longitude: float,
         digipin: str | None,
+        recipient_name: str | None = None,
+        phone: str | None = None,
+        address_line1: str | None = None,
+        address_line2: str | None = None,
+        locality: str | None = None,
+        district: str | None = None,
+        country: str | None = "India",
+        address_type: str | None = "Home",
+        phone_verified: bool = False,
+        validation_status: str = "valid",
+        validation_explanation: str | None = None,
+        is_default: bool = True,
     ) -> str:
-        """Persist Agent 6's verified address as a real `addresses` row (final target
-        plan.md commerce backbone) -- checkout previously had nowhere to write a
-        buyer-submitted address to, so `/v1/orders` had no real address to reference.
-        The newly verified address becomes the buyer's default.
+        """Persist verified address as a real `addresses` row (final target
+        plan.md commerce backbone) -- supporting structured address data, geocoding
+        metadata, validation status and custom default/non-default flags.
         """
         import uuid
 
         with self._session() as session:
-            session.execute(
-                update(Address).where(Address.user_id == buyer_id).values(is_default=False)
-            )
+            if is_default:
+                session.execute(update(Address).where(Address.user_id == buyer_id).values(is_default=False))
             address_id = f"A-{uuid.uuid4().hex[:10].upper()}"
             session.add(
                 Address(
@@ -487,7 +523,18 @@ class CommerceRepository:
                     longitude=longitude,
                     digipin=digipin,
                     verified_bool=True,
-                    is_default=True,
+                    is_default=is_default,
+                    recipient_name=recipient_name or buyer_id,
+                    phone=phone,
+                    address_line1=address_line1 or raw_address,
+                    address_line2=address_line2,
+                    locality=locality,
+                    district=district or city,
+                    country=country or "India",
+                    address_type=address_type or "Home",
+                    phone_verified=phone_verified,
+                    validation_status=validation_status,
+                    validation_explanation=validation_explanation,
                 )
             )
             session.commit()
@@ -519,9 +566,7 @@ class CommerceRepository:
         from datetime import UTC, datetime
 
         with self._session() as session:
-            record = session.execute(
-                select(ReturnRecord).where(ReturnRecord.order_id == order_id)
-            ).scalars().first()
+            record = session.execute(select(ReturnRecord).where(ReturnRecord.order_id == order_id)).scalars().first()
             if record is None:
                 record = ReturnRecord(id=f"RT-{uuid.uuid4().hex[:10].upper()}", order_id=order_id)
                 session.add(record)
@@ -552,16 +597,27 @@ class CommerceRepository:
             if spec_json is not None:
                 product.spec_json = {**product.spec_json, **spec_json}
                 for key, value in spec_json.items():
-                    record = session.execute(select(ProductSpecification).where(
-                        ProductSpecification.product_id == product_id,
-                        ProductSpecification.key == key,
-                    )).scalars().first()
+                    record = (
+                        session.execute(
+                            select(ProductSpecification).where(
+                                ProductSpecification.product_id == product_id,
+                                ProductSpecification.key == key,
+                            )
+                        )
+                        .scalars()
+                        .first()
+                    )
                     if record is None:
                         record = ProductSpecification(
-                            product_id=product_id, key=key, label=key.replace("_", " ").title(),
-                            value_json=value, value_type="number" if isinstance(value, (int, float)) else "text",
+                            product_id=product_id,
+                            key=key,
+                            label=key.replace("_", " ").title(),
+                            value_json=value,
+                            value_type="number" if isinstance(value, (int, float)) else "text",
                             unit="GSM" if key == "gsm" else ("cm" if key.endswith("_cm") else None),
-                            comparison_group="fabric" if key in {"fabric", "gsm"} else ("color" if "color" in key else "general"),
+                            comparison_group="fabric"
+                            if key in {"fabric", "gsm"}
+                            else ("color" if "color" in key else "general"),
                             comparable=True,
                         )
                         session.add(record)
@@ -573,3 +629,118 @@ class CommerceRepository:
             if status is not None:
                 product.status = status
             session.commit()
+
+    def get_user_addresses(self, user_id: str) -> list[Address]:
+        with self._session() as session:
+            return (
+                session.execute(select(Address).where(Address.user_id == user_id).order_by(Address.created_at.desc()))
+                .scalars()
+                .all()
+            )
+
+    def get_address(self, address_id: str) -> Address | None:
+        with self._session() as session:
+            return session.get(Address, address_id)
+
+    def delete_address(self, address_id: str) -> bool:
+        with self._session() as session:
+            address = session.get(Address, address_id)
+            if not address:
+                return False
+            # Check if used by an order
+            orders_count = session.execute(select(Order).where(Order.address_id == address_id)).scalars().all()
+            if orders_count:
+                raise ValueError("Cannot delete address that is linked to an order")
+            session.delete(address)
+            session.commit()
+            return True
+
+    def set_default_address(self, user_id: str, address_id: str) -> None:
+        with self._session() as session:
+            session.execute(update(Address).where(Address.user_id == user_id).values(is_default=False))
+            address = session.get(Address, address_id)
+            if address and address.user_id == user_id:
+                address.is_default = True
+            session.commit()
+
+    def create_otp_session(
+        self, user_id: str, phone: str, address_session_id: str, otp_hash: str, expires_at: datetime
+    ) -> OtpSession:
+        import uuid
+
+        with self._session() as session:
+            session.execute(
+                update(OtpSession)
+                .where(
+                    OtpSession.user_id == user_id,
+                    OtpSession.phone == phone,
+                    OtpSession.address_session_id == address_session_id,
+                )
+                .values(verified=False)
+            )
+            otp_id = f"OTP-{uuid.uuid4().hex[:10].upper()}"
+            record = OtpSession(
+                id=otp_id,
+                user_id=user_id,
+                phone=phone,
+                address_session_id=address_session_id,
+                otp_hash=otp_hash,
+                expires_at=expires_at,
+                attempts=0,
+                verified=False,
+            )
+            session.add(record)
+            session.commit()
+            return record
+
+    def get_active_otp_session(self, user_id: str, phone: str, address_session_id: str) -> OtpSession | None:
+        with self._session() as session:
+            return (
+                session.execute(
+                    select(OtpSession)
+                    .where(
+                        OtpSession.user_id == user_id,
+                        OtpSession.phone == phone,
+                        OtpSession.address_session_id == address_session_id,
+                        OtpSession.verified.is_(False),
+                    )
+                    .order_by(OtpSession.created_at.desc())
+                )
+                .scalars()
+                .first()
+            )
+
+    def get_verified_phone_session(self, user_id: str, phone: str, verification_session_id: str) -> OtpSession | None:
+        with self._session() as session:
+            return (
+                session.execute(
+                    select(OtpSession).where(
+                        OtpSession.user_id == user_id,
+                        OtpSession.phone == phone,
+                        OtpSession.id == verification_session_id,
+                        OtpSession.verified.is_(True),
+                        OtpSession.expires_at > datetime.now(UTC),
+                    )
+                )
+                .scalars()
+                .first()
+            )
+
+    def increment_otp_attempts(self, session_id: str) -> int:
+        with self._session() as session:
+            record = session.get(OtpSession, session_id)
+            if record:
+                record.attempts += 1
+                session.commit()
+                return record.attempts
+            return 0
+
+    def mark_otp_verified(self, session_id: str) -> None:
+        from datetime import UTC, datetime
+
+        with self._session() as session:
+            record = session.get(OtpSession, session_id)
+            if record:
+                record.verified = True
+                record.verified_at = datetime.now(UTC)
+                session.commit()

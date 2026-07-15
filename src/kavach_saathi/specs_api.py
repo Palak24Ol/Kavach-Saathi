@@ -30,12 +30,15 @@ async def spec_extract(payload: SpecExtractRequest, container: Container = Depen
     """Plan-literal endpoint (final target plan.md Section 6, Agent 2) -- runs the same
     Claude OCR + CLIP/ResNet-50 pipeline as the `/listings/analyze` fan-out, addressable
     on its own so a judge (or the seller portal) can call it directly per the spec."""
-    image_key = _source_image_key(container, payload.product_id)
+    product = container.repository.get("products", payload.product_id)
+    image_key = product["media"]["primary"]
     request = ListingAnalyzeRequest(
-        seller_id=container.repository.get("products", payload.product_id)["seller_id"],
+        seller_id=product["seller_id"],
         product_id=payload.product_id,
         image_keys=[image_key],
-        seller_specs={},
+        # The evidence policy can only identify seller-declared fields that are
+        # absent from the image when the listing's declarations are preserved.
+        seller_specs=product["specs"],
     )
     result = await container.service.graphs.specs.run(request)
     return {

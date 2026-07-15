@@ -262,10 +262,21 @@ class VoiceQueryRequest(BaseModel):
 
 class AddressVerifyRequest(BaseModel):
     buyer_id: str
-    raw_address: str
+    raw_address: str | None = None
     postal_pin: str = Field(pattern=r"^\d{6}$")
     coordinates: Coordinates
     idempotency_key: str | None = None
+
+    recipient_name: str | None = None
+    phone: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    locality: str | None = None
+    city: str | None = None
+    district: str | None = None
+    state: str | None = None
+    country: str | None = None
+    address_type: str | None = None
 
 
 class ConfirmationRequest(BaseModel):
@@ -343,3 +354,61 @@ class HealthResponse(BaseModel):
     mode: Literal["demo", "live"]
     agents: int = 8
     checks: dict[str, bool | int | str]
+
+
+class AddressCreateRequest(BaseModel):
+    recipient_name: str
+    phone: str
+    address_line1: str
+    address_line2: str | None = None
+    locality: str | None = None
+    city: str
+    district: str
+    state: str
+    postal_pin: str = Field(pattern=r"^\d{6}$")
+    country: str = "India"
+    latitude: float
+    longitude: float
+    address_type: str = "Home"
+    is_default: bool = False
+    verification_session_id: str
+
+
+class AddressUpdateRequest(BaseModel):
+    recipient_name: str | None = None
+    phone: str | None = None
+    address_line1: str | None = None
+    address_line2: str | None = None
+    locality: str | None = None
+    city: str | None = None
+    district: str | None = None
+    state: str | None = None
+    postal_pin: str | None = Field(default=None, pattern=r"^\d{6}$")
+    country: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+    address_type: str | None = None
+    is_default: bool | None = None
+    verification_session_id: str | None = None
+
+
+class AddressGeocodeRequest(BaseModel):
+    address_line1: str
+    address_line2: str | None = None
+    locality: str | None = None
+    city: str
+    district: str
+    state: str
+    postal_pin: str = Field(pattern=r"^\d{6}$")
+    country: str = "India"
+
+
+class OtpSendRequest(BaseModel):
+    phone: str = Field(pattern=r"^\+?[1-9]\d{1,14}$")
+    address_session_id: str = Field(min_length=16, max_length=64)
+
+
+class OtpVerifyRequest(BaseModel):
+    phone: str = Field(pattern=r"^\+?[1-9]\d{1,14}$")
+    otp: str = Field(min_length=6, max_length=6)
+    address_session_id: str = Field(min_length=16, max_length=64)
