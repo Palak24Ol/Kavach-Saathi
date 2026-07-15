@@ -161,6 +161,16 @@ class SellerOrderStatusUpdate(BaseModel):
     status: Literal["PACKED", "SHIPPED"]
 
 
+class AdminReturnResolution(BaseModel):
+    decision: Literal["approve", "reject"]
+    notes: str | None = None
+
+
+class AdminTrustScoreOverride(BaseModel):
+    trust_score: float | None = Field(default=None, ge=0, le=100)
+    verified: bool | None = None
+
+
 class KYCStartResponse(BaseModel):
     authorize_url: str | None
     configured: bool
