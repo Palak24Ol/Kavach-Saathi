@@ -150,13 +150,14 @@ function TrustDock({ trust, busy, onClose, onRunAll }) {
   );
 }
 
-function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, onAsk, onAskVoice, voiceAudioUrl, onSubmitReview }) {
+function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, onAsk, onAskVoice, voiceAudioUrl, agentAnswer, onSubmitReview }) {
   const [size, setSize] = useState("M");
   const [question, setQuestion] = useState("Iska fabric aur return policy batao");
   const [reviewRating, setReviewRating] = useState(5);
   const [reviewText, setReviewText] = useState("");
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [requestingMic, setRequestingMic] = useState(false);
   const mediaRecorderRef = useRef(null);
   const chunksRef = useRef([]);
 
@@ -166,6 +167,11 @@ function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, 
       setRecording(false);
       return;
     }
+    if (!navigator.mediaDevices?.getUserMedia) {
+      onAskVoiceError("This browser does not support microphone access");
+      return;
+    }
+    setRequestingMic(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream);
@@ -179,9 +185,16 @@ function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, 
       mediaRecorderRef.current = recorder;
       recorder.start();
       setRecording(true);
-    } catch {
-      onAskVoice(null);
+    } catch (reason) {
+      const message = reason?.name === "NotAllowedError" ? "Microphone access was denied" : reason?.name === "NotFoundError" ? "No microphone was found" : "Could not access the microphone";
+      onAskVoiceError(message);
+    } finally {
+      setRequestingMic(false);
     }
+  }
+
+  function onAskVoiceError(message) {
+    onAskVoice(null, message);
   }
 
   if (!product) return null;
@@ -223,10 +236,13 @@ function ProductDrawer({ product, open, busy, onClose, onAdd, onSize, onReview, 
             <label htmlFor="product-question"><Mic size={15} /> Ask in Hindi or English</label>
             <div>
               <input id="product-question" value={question} onChange={(event) => setQuestion(event.target.value)} />
-              <button type="button" onClick={toggleRecording} aria-pressed={recording} title={recording ? "Stop recording" : "Ask by voice"}>{recording ? "⏹" : <Mic size={15} />}</button>
+              <button type="button" onClick={toggleRecording} disabled={requestingMic} aria-pressed={recording} title={recording ? "Stop recording" : "Ask by voice"}>{requestingMic ? <LoaderCircle className="spin" size={15} /> : recording ? "⏹" : <Mic size={15} />}</button>
               <button type="submit" disabled={busy}>Ask</button>
             </div>
+            {requestingMic && <small style={{ color: "var(--plum)", fontWeight: 600 }}>Waiting for microphone permission…</small>}
+            {recording && <small style={{ color: "var(--accent, #e5484d)", fontWeight: 600 }}>Recording… click mic again to stop</small>}
             <small>Agent 5 (Gemini + Pinecone RAG) answers, grounded only in verified product data and real reviews.</small>
+            {agentAnswer && <div className="agent-answer"><Sparkles size={14} /> <span>{agentAnswer}</span></div>}
             {voiceAudioUrl && <audio controls src={voiceAudioUrl} style={{ width: "100%", marginTop: 8 }} />}
           </form>
 
@@ -271,8 +287,7 @@ function CartDrawer({ items, open, onClose, onRemove, onCheckout }) {
   );
 }
 
-function CheckoutDrawer({ open, context, busy, step, verifiedAddress, orderId, onClose, onVerify, onConfirm, onReturn }) {
-  const address = context?.address;
+function CheckoutDrawer({ open, context, busy, step, verifiedAddress, orderId, onClose, onVerify, onConfirm, onReturn, addressRaw, addressPin, onAddressRawChange, onAddressPinChange, buyerName }) {
   return (
     <div className={`drawer-layer ${open ? "open" : ""}`} aria-hidden={!open}>
       <button className="drawer-scrim" type="button" onClick={onClose} aria-label="Close checkout" />
@@ -280,11 +295,19 @@ function CheckoutDrawer({ open, context, busy, step, verifiedAddress, orderId, o
         <div className="side-heading"><div><p>SECURE CHECKOUT</p><h2>{step === "done" ? "Order protected" : "Delivery details"}</h2></div><button type="button" onClick={onClose} aria-label="Close"><X size={20} /></button></div>
         <div className="checkout-progress"><span className="complete"><Check size={12} /> Cart</span><i></i><span className={verifiedAddress ? "complete" : "active"}>Address</span><i></i><span className={step === "done" ? "complete" : ""}>Confirm</span></div>
         {step !== "done" ? <div className="checkout-body">
-          <div className="address-card"><MapPin size={20} /><div><strong>{context?.buyer?.name || "Sunita"}</strong><p>{address?.raw_address || "Hanuman Mandir ke peeche, gali no. 3"}, {address?.city || "Bilaspur"}, {address?.state || "Chhattisgarh"} {address?.expected_postal_pin || "495001"}</p></div>{verifiedAddress && <span><Check size={13} /> Verified</span>}</div>
-          {!verifiedAddress ? <button className="agent-action" type="button" onClick={onVerify} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <MapPin size={17} />} Agent 6 · Verify address & DIGIPIN</button> : <div className="verified-address"><ShieldCheck size={22} /><div><strong>Location and PIN agree</strong><p>DIGIPIN generated. The delivery label now uses normalized location evidence.</p></div></div>}
+          <div className="address-card address-form">
+            <MapPin size={20} />
+            <div>
+              <strong>{buyerName || "Buyer"}</strong>
+              <input type="text" placeholder="Full address (e.g. Hanuman Mandir ke peeche, gali no. 3)" value={addressRaw} onChange={(e) => onAddressRawChange(e.target.value)} disabled={verifiedAddress} />
+              <input type="text" placeholder="PIN code (e.g. 495001)" value={addressPin} onChange={(e) => onAddressPinChange(e.target.value)} disabled={verifiedAddress} maxLength={6} />
+            </div>
+            {verifiedAddress && <span><Check size={13} /> Verified</span>}
+          </div>
+          {!verifiedAddress ? <button className="agent-action" type="button" onClick={onVerify} disabled={busy || (!addressRaw && !context?.address)}>{busy ? <LoaderCircle className="spin" size={17} /> : <MapPin size={17} />} Agent 6 · Verify address & DIGIPIN</button> : <div className="verified-address"><ShieldCheck size={22} /><div><strong>Location and PIN agree</strong><p>DIGIPIN generated. The delivery label now uses normalized location evidence.</p></div></div>}
           <div className="consent-box"><Truck size={19} /><div><strong>Agent 7 delivery confirmation</strong><p>Simulates buyer availability before the parcel is released for dispatch.</p></div></div>
           <button className="primary-cta wide" type="button" onClick={onConfirm} disabled={!verifiedAddress || busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <PackageCheck size={17} />} Confirm availability & place order</button>
-        </div> : <div className="success-state"><span><PackageCheck size={40} /></span><h3>Order {orderId || "O-GOLDEN"} is protected</h3><p>Address verified, buyer availability confirmed, and dispatch released with a traceable evidence trail.</p><div><Check size={15} /> Agent 6 verified address<DockLine /><Check size={15} /> Agent 7 captured consent</div><button className="secondary-cta" type="button" onClick={onReturn}><RotateCcw size={16} /> Simulate fair return check</button></div>}
+        </div> : <div className="success-state"><span><PackageCheck size={40} /></span><h3>Order {orderId} is protected</h3><p>Address verified, buyer availability confirmed, and dispatch released with a traceable evidence trail.</p><div><Check size={15} /> Agent 6 verified address<DockLine /><Check size={15} /> Agent 7 captured consent</div><button className="secondary-cta" type="button" onClick={onReturn}><RotateCcw size={16} /> Simulate fair return check</button></div>}
       </aside>
     </div>
   );
@@ -399,16 +422,23 @@ export default function Storefront() {
   const [verifiedAddressId, setVerifiedAddressId] = useState(null);
   const [lastOrderId, setLastOrderId] = useState(null);
   const [voiceAudioKey, setVoiceAudioKey] = useState(null);
+  const [agentAnswer, setAgentAnswer] = useState("");
   const [trust, setTrust] = useState({ open: false, results: {}, message: "" });
   const [auth, setAuth] = useState(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingAfterAuth, setPendingAfterAuth] = useState(null);
+  const [addressRaw, setAddressRaw] = useState("");
+  const [addressPin, setAddressPin] = useState("");
 
   useEffect(() => {
-    // Reading localStorage must happen post-mount to avoid an SSR/client hydration
-    // mismatch (the server always renders logged-out markup).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setAuth(loadAuthSession());
+    function onSessionExpired() {
+      setAuth(null);
+      setAuthModalOpen(true);
+      setToast("Session expired — please log in again");
+    }
+    window.addEventListener("kavach:session-expired", onSessionExpired);
+    return () => window.removeEventListener("kavach:session-expired", onSessionExpired);
   }, []);
 
   useEffect(() => {
@@ -471,8 +501,14 @@ export default function Storefront() {
 
   async function changeLanguage(languageCode) {
     if (!auth?.user) return;
-    const updated = await patch("/auth/language", { language: languageCode });
-    setAuth((current) => ({ ...current, user: { ...current.user, preferred_language: updated.preferred_language } }));
+    try {
+      const updated = await patch("/auth/language", { language: languageCode });
+      setAuth((current) => ({ ...current, user: { ...current.user, preferred_language: updated.preferred_language } }));
+      const label = LANGUAGE_OPTIONS.find((opt) => opt.code === languageCode)?.label || languageCode;
+      setToast(`Language set to ${label} — Agent 5 will respond in this language`);
+    } catch (reason) {
+      setToast(reason.message || "Could not update language");
+    }
   }
 
   useEffect(() => {
@@ -534,6 +570,7 @@ export default function Storefront() {
     setDrawer("product");
     setSelected(product);
     setVoiceAudioKey(null);
+    setAgentAnswer("");
     try {
       const detail = await request(`/storefront/products/${product.id}`);
       setSelected(detail);
@@ -542,10 +579,18 @@ export default function Storefront() {
     }
   }
 
-  function addToCart(product, size = "Standard") {
+  function addToCart(product, size) {
+    const hasChart = product.size_chart && Object.keys(product.size_chart).length > 0;
+    const resolvedSize = size || (hasChart ? Object.keys(product.size_chart)[0] : "Standard");
+    if (hasChart && !size) {
+      setSelected(product);
+      setDrawer("product");
+      setToast("Please select a size first");
+      return;
+    }
     requireAuth(async () => {
       try {
-        await apiAddToCart(variantIdFor(product, size));
+        await apiAddToCart(variantIdFor(product, resolvedSize));
         await refreshCart();
         setToast(`${product.name} added to cart`);
       } catch (reason) {
@@ -576,7 +621,11 @@ export default function Storefront() {
     const review = selected?.reviews?.find((item) => !item.expected_relevant) || selected?.reviews?.[0];
     const fallback = { id: "RV-BAD", product_id: "P-001", media: "assets/mock/reviews/RV-BAD.png" };
     const target = review || fallback;
-    await execute("Agent 4 is matching review media…", () => postAndPoll("/reviews/analyze", { review_id: target.id, product_id: target.product_id, image_key: target.media }));
+    try {
+      const payload = await execute("Agent 4 is matching review media…", () => postAndPoll("/reviews/analyze", { review_id: target.id, product_id: target.product_id, image_key: target.media }));
+      const result = payload.results?.review_filter;
+      setToast(result?.summary || "Review analysis complete — see agent activity panel");
+    } catch { /* execute() already shows a toast on error */ }
   }
 
   async function submitReview(productId, rating, text) {
@@ -594,14 +643,18 @@ export default function Storefront() {
     if (!selected) return;
     const buyerId = auth?.user?.id || "B-001";
     const language = auth?.user?.preferred_language || "hi";
-    const payload = await execute("Agent 5 is grounding the answer…", () => post("/voice/query", { buyer_id: buyerId, product_id: selected.id, text: question, language }));
-    setVoiceAudioKey(payload.results.voice_qa?.data?.audio_key || null);
+    try {
+      const payload = await execute("Agent 5 is grounding the answer…", () => post("/voice/query", { buyer_id: buyerId, product_id: selected.id, text: question, language }));
+      const result = payload.results?.voice_qa;
+      setAgentAnswer(result?.user_message?.[language] || result?.summary || "");
+      setVoiceAudioKey(result?.data?.audio_key || null);
+    } catch { /* execute() already shows a toast on error */ }
   }
 
-  async function askVoice(blob) {
+  async function askVoice(blob, errorMessage) {
     if (!selected) return;
     if (!blob) {
-      setToast("Could not access the microphone");
+      setToast(errorMessage || "Could not access the microphone");
       return;
     }
     const buyerId = auth?.user?.id || "B-001";
@@ -611,7 +664,9 @@ export default function Storefront() {
       const presign = await post("/uploads/presign", { kind: "voice", filename: `question.${extension}`, content_type: blob.type || "audio/webm" });
       await fetch(presign.upload_url, { method: "PUT", body: blob, headers: { "Content-Type": blob.type || "audio/webm" } });
       const payload = await execute("Agent 5 is transcribing and grounding your question…", () => post("/voice/query", { buyer_id: buyerId, product_id: selected.id, audio_key: presign.object_key, language }));
-      setVoiceAudioKey(payload.results.voice_qa?.data?.audio_key || null);
+      const result = payload.results?.voice_qa;
+      setAgentAnswer(result?.user_message?.[language] || result?.summary || "");
+      setVoiceAudioKey(result?.data?.audio_key || null);
     } catch (reason) {
       setToast(reason.message || "Could not process your voice question");
     }
@@ -620,9 +675,14 @@ export default function Storefront() {
   async function verifyAddress() {
     requireAuth(async (buyerId) => {
       const address = context?.address;
-      const payload = await execute("Agent 6 is checking coordinates, PIN and DIGIPIN…", () => postAndPoll("/address/verify", { buyer_id: buyerId, raw_address: address?.raw_address || "Hanuman Mandir ke peeche, gali no. 3", postal_pin: address?.expected_postal_pin || "495001", coordinates: address?.coordinates || { latitude: 22.0797, longitude: 82.1409 } }));
-      setVerifiedAddressId(payload.results.address_guardian?.data?.address_id || null);
-      setVerifiedAddress(true);
+      const rawAddr = addressRaw || address?.raw_address || "Hanuman Mandir ke peeche, gali no. 3";
+      const pin = addressPin || address?.expected_postal_pin || "495001";
+      const coords = address?.coordinates || { latitude: 22.0797, longitude: 82.1409 };
+      try {
+        const payload = await execute("Agent 6 is checking coordinates, PIN and DIGIPIN…", () => postAndPoll("/address/verify", { buyer_id: buyerId, raw_address: rawAddr, postal_pin: pin, coordinates: coords }));
+        setVerifiedAddressId(payload.results.address_guardian?.data?.address_id || null);
+        setVerifiedAddress(true);
+      } catch { /* execute() already shows a toast on error */ }
     });
   }
 
@@ -646,8 +706,11 @@ export default function Storefront() {
   }
 
   async function checkReturn() {
-    await execute("Agent 8 is comparing return evidence…", () => postAndPoll("/returns/analyze", { order_id: lastOrderId || "O-GOLDEN", video_key: "assets/mock/returns/return-approve.mp4", additional_image_keys: [] }));
-    setToast("Return evidence is consistent — pickup can be scheduled");
+    try {
+      const payload = await execute("Agent 8 is comparing return evidence…", () => postAndPoll("/returns/analyze", { order_id: lastOrderId || "O-GOLDEN", video_key: "assets/mock/returns/return-approve.mp4", additional_image_keys: [] }));
+      const result = payload.results?.return_verifier;
+      setToast(result?.summary || "Return evidence is consistent — pickup can be scheduled");
+    } catch { /* execute() already shows a toast on error */ }
   }
 
   async function runAll() {
@@ -745,9 +808,9 @@ export default function Storefront() {
 
       <button className="floating-saathi" type="button" onClick={() => setTrust((current) => ({ ...current, open: !current.open }))}><ShieldCheck size={20} /><span><strong>Kavach Saathi</strong><small>{busy ? "Agents working…" : `${Object.keys(trust.results).length}/8 checks visible`}</small></span></button>
       <TrustDock trust={trust} busy={busy} onClose={() => setTrust((current) => ({ ...current, open: false }))} onRunAll={runAll} />
-      <ProductDrawer product={selected} open={drawer === "product"} busy={busy} onClose={() => setDrawer(null)} onAdd={addToCart} onSize={recommendSize} onReview={checkReview} onAsk={askQuestion} onAskVoice={askVoice} voiceAudioUrl={audioUrl(voiceAudioKey)} onSubmitReview={submitReview} />
+      <ProductDrawer product={selected} open={drawer === "product"} busy={busy} onClose={() => setDrawer(null)} onAdd={addToCart} onSize={recommendSize} onReview={checkReview} onAsk={askQuestion} onAskVoice={askVoice} voiceAudioUrl={audioUrl(voiceAudioKey)} agentAnswer={agentAnswer} onSubmitReview={submitReview} />
       <CartDrawer items={cart} open={drawer === "cart"} onClose={() => setDrawer(null)} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); setVerifiedAddress(false); setVerifiedAddressId(null); })} />
-      <CheckoutDrawer open={drawer === "checkout"} context={context} busy={busy} step={checkoutStep} verifiedAddress={verifiedAddress} orderId={lastOrderId} onClose={() => setDrawer(null)} onVerify={verifyAddress} onConfirm={confirmOrder} onReturn={checkReturn} />
+      <CheckoutDrawer open={drawer === "checkout"} context={context} busy={busy} step={checkoutStep} verifiedAddress={verifiedAddress} orderId={lastOrderId} onClose={() => setDrawer(null)} onVerify={verifyAddress} onConfirm={confirmOrder} onReturn={checkReturn} addressRaw={addressRaw} addressPin={addressPin} onAddressRawChange={setAddressRaw} onAddressPinChange={setAddressPin} buyerName={auth?.user?.name} />
       <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
       {toast && <div className="toast" role="status"><Check size={16} /> {toast}</div>}
     </div>

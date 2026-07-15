@@ -304,6 +304,12 @@ img { max-width: 100%; }
 .address-card p { margin: 5px 0 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
 .address-card > span { position: absolute; top: 12px; right: 12px; display: flex; align-items: center; gap: 4px; padding: 5px 7px; border-radius: 99px; color: var(--green); background: var(--green-soft); font-size: 7px; font-weight: 900; }
 .agent-action { width: 100%; margin-top: 12px; border: 1px solid #d7bec9; color: var(--plum); background: var(--pink); }
+.address-form > div { flex: 1; }
+.address-form input { width: 100%; margin-top: 6px; padding: 9px 10px; border: 1px solid var(--line); border-radius: 7px; outline: 0; font-size: 9px; font-family: inherit; }
+.address-form input:disabled { opacity: .6; background: var(--soft); }
+.address-form input + input { width: 140px; }
+.agent-answer { display: flex; gap: 7px; margin-top: 10px; padding: 10px 12px; border-radius: 9px; color: var(--plum); background: var(--pink); font-size: 9px; line-height: 1.5; }
+.agent-answer svg { flex: 0 0 auto; margin-top: 1px; }
 .verified-address, .consent-box { display: flex; gap: 10px; margin-top: 12px; padding: 13px; border-radius: 10px; }
 .verified-address { color: var(--green); background: var(--green-soft); }
 .consent-box { color: var(--amber); background: var(--amber-soft); }

@@ -31,6 +31,11 @@ export async function request(path, options = {}) {
       ...(options.headers || {}),
     },
   });
+  if (response.status === 401) {
+    saveAuthSession(null);
+    window.dispatchEvent(new CustomEvent("kavach:session-expired"));
+    throw new Error("Session expired — please log in again");
+  }
   const payload = await response.json();
   if (!response.ok) {
     throw new Error(payload.detail || payload.error || `Request failed (${response.status})`);
@@ -90,7 +95,10 @@ export const listMyOrders = () => get("/orders");
 export const createReview = (payload) => post("/reviews", payload);
 
 export function assetUrl(path) {
-  return path?.replace(/^\/mock-assets/, "/mock-assets") || "";
+  if (!path) return "";
+  if (path.startsWith("/mock-assets")) return path;
+  if (path.startsWith("assets/mock/")) return `/mock-assets/${path.slice("assets/mock/".length)}`;
+  return `/mock-assets/${path}`;
 }
 
 export async function signup(payload) {
