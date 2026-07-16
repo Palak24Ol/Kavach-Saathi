@@ -34,6 +34,7 @@ from kavach_saathi.events import start_order_consumer, start_review_consumer
 from kavach_saathi.models import (
     AddressVerifyRequest,
     AuthUser,
+    ConfirmationRequest,
     HealthResponse,
     ListingAnalyzeRequest,
     LoginRequest,
@@ -503,6 +504,14 @@ def create_app() -> FastAPI:
     @app.post(f"{prefix}/returns/analyze", response_model=RunEnvelope)
     async def analyze_return(payload: ReturnAnalyzeRequest, container: Container = Depends(get_container)):
         return await run(WorkflowType.RETURN, payload, container)
+
+    @app.post(f"{prefix}/orders/{{order_id}}/confirm-simulated")
+    async def confirm_delivery_simulated(
+        order_id: str, payload: ConfirmationRequest, container: Container = Depends(get_container)
+    ):
+        agent = container.service.graphs.confirmation
+        result = await agent.confirm_simulated(order_id, payload.decision, payload.scheduled_date)
+        return {"results": {"delivery_confirmation": result}}
 
     @app.get(f"{prefix}/runs/{{run_id}}", response_model=RunEnvelope)
     async def get_run(run_id: UUID, container: Container = Depends(get_container)):

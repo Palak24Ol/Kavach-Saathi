@@ -199,6 +199,47 @@ class DeliveryConfirmationAgent(Agent):
 
         return result
 
+    async def confirm_simulated(
+        self, order_id: str, decision: str, scheduled_date: str | None = None
+    ) -> AgentResult:
+        """Manual/simulated path -- a checkout-flow convenience (same pattern as Agent
+        4's manual "Check review truth" button) so a real phone call to a real, live
+        number isn't required just to progress an order through DELIVERED. This is the
+        practical way for anyone besides the buyer whose number is on file (e.g. a
+        judge or teammate without the buyer's phone) to exercise the rest of the
+        pipeline -- fit feedback, returns, exchanges -- without Twilio ever placing a
+        real call to a number it doesn't know."""
+        order = self.context.repository.get("orders", order_id)
+        messages = {
+            "confirmed": "Buyer availability confirmed; order can proceed to dispatch.",
+            "reschedule": "Buyer requested a different delivery date before dispatch.",
+            "cancel": "Buyer cancelled before dispatch, preventing an avoidable RTO.",
+        }
+        if decision == "confirmed":
+            with SessionLocal() as session:
+                self.execute_delivery_transition(session, order_id, actor="manual")
+                session.commit()
+            action = AgentAction(type="release_dispatch", label="Release for dispatch")
+        elif decision == "reschedule":
+            self.context.repository.update_order_status(order_id, "PLACED", actor="manual")
+            action = AgentAction(type="reschedule", label="Reschedule delivery", payload={"date": scheduled_date})
+        else:
+            self.context.repository.update_order_status(order_id, "CANCELLED", actor="manual")
+            action = AgentAction(type="cancel_before_dispatch", label="Cancel order")
+
+        return AgentResult(
+            agent=AgentName.DELIVERY_CONFIRMATION,
+            confidence=100,
+            summary=messages[decision],
+            evidence=[
+                Evidence(key="channel", value="simulated", source="demo_interaction"),
+                Evidence(key="order_status", value=order["status"], source="order_record"),
+            ],
+            actions=[action],
+            data={"decision": decision, "scheduled_date": scheduled_date},
+            user_message={"en": messages[decision], "hi": "Delivery preference record ho gayi."},
+        )
+
     async def handle_recording(self, order_id: str, recording_url: str) -> AgentResult:
         started_at = time.perf_counter()
         settings = get_settings()

@@ -53,6 +53,10 @@ services:
         condition: service_healthy
     volumes:
       - ./assets:/app/assets
+      # SAM 2.0 / CLIP / Stable Diffusion + ControlNet checkpoints (several GB) --
+      # without this, every container recreate re-downloads them from HuggingFace Hub,
+      # which is what made Agent 1's image generation look "hung" on a fresh container.
+      - kavach_hf_cache:/root/.cache/huggingface
 
   frontend:
     build:
@@ -69,3 +73,4 @@ services:
 volumes:
   kavach_postgres_data:
   kavach_redis_data:
+  kavach_hf_cache:
