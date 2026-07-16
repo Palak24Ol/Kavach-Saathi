@@ -1,5 +1,3 @@
-import pytest
-from sqlalchemy import select
 from kavach_saathi.db.base import SessionLocal
 from kavach_saathi.db.models import Order, OrderItem, Product, ReturnRecord, User, OrderStatusHistory
 from kavach_saathi.order_status import OrderStatus
@@ -175,8 +173,6 @@ def test_return_exchange_approval_and_replacement_order():
         # 3. Assert results
         session.expire_all()
         updated_return = session.get(ReturnRecord, "RT-TEST-456")
-        updated_order = session.get(Order, "O-TEST-456")
-
         assert updated_return.decision == "approve"
         assert updated_return.status == "pickup_scheduled"
         assert updated_return.pickup_date is not None

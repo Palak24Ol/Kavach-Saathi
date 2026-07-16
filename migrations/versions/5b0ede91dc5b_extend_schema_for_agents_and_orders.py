@@ -53,8 +53,6 @@ def upgrade() -> None:
     op.add_column('returns', sa.Column('status_timeline', postgresql.JSONB(astext_type=sa.Text()), server_default='[]', nullable=False))
     op.create_foreign_key(None, 'returns', 'orders', ['replacement_order_id'], ['id'])
     op.add_column('reviews', sa.Column('media_hidden_by_agent', sa.Boolean(), server_default='false', nullable=False))
-    op.add_column('reviews', sa.Column('order_id', sa.String(length=32), nullable=True))
-    op.create_foreign_key('fk_reviews_order_id_orders', 'reviews', 'orders', ['order_id'], ['id'])
     op.add_column('reviews', sa.Column('awaiting_analysis', sa.Boolean(), server_default='true', nullable=False))
     op.add_column('reviews', sa.Column('relevance_score', sa.Float(), nullable=True))
     op.add_column('reviews', sa.Column('media_relevance_score', sa.Float(), nullable=True))
@@ -95,5 +93,3 @@ def downgrade() -> None:
     op.drop_column('orders', 'exchange_tag')
     op.drop_table('support_interactions')
     # ### end Alembic commands ###
-    op.drop_constraint('fk_reviews_order_id_orders', 'reviews', type_='foreignkey')
-    op.drop_column('reviews', 'order_id')

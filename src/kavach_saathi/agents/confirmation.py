@@ -13,7 +13,7 @@ from kavach_saathi.agents.base import Agent
 from kavach_saathi.config import get_settings
 from kavach_saathi.db.base import SessionLocal
 from kavach_saathi.media_storage import write_generated_image
-from kavach_saathi.models import AgentAction, AgentName, AgentResult, ConfirmationRequest, Evidence
+from kavach_saathi.models import AgentAction, AgentName, AgentResult, Evidence
 from kavach_saathi.providers.reasoning import ReasoningUnavailable
 from kavach_saathi.providers.sarvam import SarvamClient, SarvamUnavailable
 from kavach_saathi.providers.twilio_voice import TwilioUnavailable, TwilioVoiceClient
@@ -407,45 +407,3 @@ class DeliveryConfirmationAgent(Agent):
                                     product.stock = max(0, product.stock - item.qty)
                         order.stock_decremented = True
                         session.flush()
-
-    async def run(self, order_id: str, request: ConfirmationRequest) -> AgentResult:
-        """Manual/simulated path -- kept as a checkout-flow convenience (same pattern as
-        Agent 4's manual "Check review truth" button) so the demo doesn't require a real
-        phone call just to progress an order through the UI."""
-        order = self.context.repository.get("orders", order_id)
-        decision = request.decision
-        if decision == "confirmed":
-            with SessionLocal() as session:
-                self.execute_delivery_transition(session, order_id, actor="agent")
-                session.commit()
-            # Fetch updated order state
-            order = self.context.repository.get("orders", order_id)
-
-        messages = {
-            "confirmed": "Buyer availability confirmed; order can proceed to dispatch.",
-            "reschedule": "Buyer requested a different delivery date before dispatch.",
-            "cancel": "Buyer cancelled before dispatch, preventing an avoidable RTO.",
-            "update_address": "Buyer requested an address update; address verification must run again.",
-        }
-        actions = {
-            "confirmed": AgentAction(type="release_dispatch", label="Release for dispatch"),
-            "reschedule": AgentAction(
-                type="reschedule",
-                label="Reschedule delivery",
-                payload={"date": request.scheduled_date},
-            ),
-            "cancel": AgentAction(type="cancel_before_dispatch", label="Cancel order"),
-            "update_address": AgentAction(type="verify_updated_address", label="Verify updated address"),
-        }
-        return AgentResult(
-            agent=AgentName.DELIVERY_CONFIRMATION,
-            confidence=100,
-            summary=messages[decision],
-            evidence=[
-                Evidence(key="channel", value="simulated", source="demo_interaction"),
-                Evidence(key="order_status", value=order["status"], source="order_record"),
-            ],
-            actions=[actions[decision]],
-            data={"decision": decision, "scheduled_date": request.scheduled_date},
-            user_message={"en": messages[decision], "hi": "Delivery preference record ho gayi."},
-        )

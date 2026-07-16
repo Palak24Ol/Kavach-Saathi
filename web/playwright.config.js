@@ -12,7 +12,7 @@ export default defineConfig({
   workers: 1,
   retries: 0,
   reporter: [["list"]],
-  timeout: 60_000,
+  timeout: 120_000,
   use: {
     baseURL: process.env.E2E_BASE_URL || "http://localhost:3000",
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH

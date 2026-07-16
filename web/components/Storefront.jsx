@@ -88,13 +88,6 @@ const AGENTS = {
   return_verifier: { number: "08", short: "Fair Returns", icon: RotateCcw },
 };
 
-const GOLDEN_SPECS = {
-  fabric: "60% Cotton, 40% Viscose",
-  gsm: 150,
-  color_hex: "#800000",
-  wash_care: "Gentle hand wash",
-};
-
 function variantIdFor(product, size) {
   // Matches the backend's variant-id convention (scripts/generate_seed_data.py,
   // seller_api.py): "{product_id}-{size}" for chart sizes, "{product_id}-STD" when a
@@ -162,7 +155,7 @@ function QuantityStepper({ qty, onDecrease, onIncrease, busy = false, max = 10, 
   );
 }
 
-function TrustDock({ trust, busy, onClose, onRunAll }) {
+function TrustDock({ trust, busy, onClose }) {
   const entries = Object.entries(trust.results);
   return (
     <aside className={`trust-dock ${trust.open ? "open" : ""}`} aria-label="Kavach Saathi agent activity">
@@ -176,7 +169,7 @@ function TrustDock({ trust, busy, onClose, onRunAll }) {
       </div>
       <div className="dock-results">
         {!entries.length && (
-          <div className="dock-empty"><Sparkles size={26} /><strong>See the orchestrator work</strong><p>Run the safety tour or use any trust action inside the shop.</p></div>
+          <div className="dock-empty"><Sparkles size={26} /><strong>Agent activity</strong><p>Verified results from your actions will appear here.</p></div>
         )}
         {entries.map(([key, result]) => {
           const meta = AGENTS[key];
@@ -189,15 +182,11 @@ function TrustDock({ trust, busy, onClose, onRunAll }) {
           );
         })}
       </div>
-      <button className="dock-run" type="button" onClick={onRunAll} disabled={busy}>
-        {busy ? <LoaderCircle className="spin" size={16} /> : <Sparkles size={16} />} Run all 8 agents
-      </button>
-      <p className="prototype-note">Synthetic prototype data · Agent 7 is simulated</p>
     </aside>
   );
 }
 
-function ProductPageView({ product, busy, cart, cartBusy, onBack, onClose, onAdd, onUpdateCart, onOpenCart, onWishlist, wished, onSize, onReview, onAsk, onAskVoice, voiceAudioUrl, agentAnswer, sizeSaathi }) {
+function ProductPageView({ product, similarProducts, busy, cart, cartBusy, onBack, onClose, onAdd, onUpdateCart, onOpenCart, onWishlist, wished, onSize, onReview, onAsk, onAskVoice, voiceAudioUrl, agentAnswer, sizeSaathi }) {
   const [size, setSize] = useState("M");
 
   useEffect(() => {
@@ -844,7 +833,6 @@ function ReturnVerificationDrawer({ open, returnId, returns, orders, onClose, on
 
 function CheckoutDrawer({
   open,
-  context,
   busy,
   step,
   orderId,
@@ -963,7 +951,7 @@ function CheckoutDrawer({
             )}
 
             {isValidAddress && (
-              <div className="consent-box" style={{ margin: 0 }}><Truck size={19} /><div><strong>Agent 7 delivery confirmation</strong><p>Simulates buyer availability before the parcel is released for dispatch.</p></div></div>
+              <div className="consent-box" style={{ margin: 0 }}><Truck size={19} /><div><strong>Agent 7 delivery confirmation</strong><p>A real verification call confirms buyer availability before delivery.</p></div></div>
             )}
 
             {selectedAddress && (
@@ -1598,21 +1586,19 @@ export default function Storefront({ initialProductId = null }) {
   const router = useRouter();
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
-  const [context, setContext] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("All");
   const [visibleCount, setVisibleCount] = useState(50);
   const [selected, setSelected] = useState(null);
+  const [similarProducts, setSimilarProducts] = useState([]);
   const [drawer, setDrawer] = useState(null);
   const [cart, setCart] = useState([]);
   const [cartBusy, setCartBusy] = useState(null);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [checkoutStep, setCheckoutStep] = useState("address");
-  const [verifiedAddress, setVerifiedAddress] = useState(false);
-  const [verifiedAddressId, setVerifiedAddressId] = useState(null);
   const [lastOrderId, setLastOrderId] = useState(null);
   const [lastOrderSummary, setLastOrderSummary] = useState(null);
   const [voiceAudioKey, setVoiceAudioKey] = useState(null);
@@ -1623,8 +1609,6 @@ export default function Storefront({ initialProductId = null }) {
   const [auth, setAuth] = useState(null);
   const [authModalOpen, setAuthModalOpen] = useState(false);
   const [pendingAfterAuth, setPendingAfterAuth] = useState(null);
-  const [addressRaw, setAddressRaw] = useState("");
-  const [addressPin, setAddressPin] = useState("");
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const [wishlist, setWishlist] = useState([]);
@@ -1650,13 +1634,23 @@ export default function Storefront({ initialProductId = null }) {
   useEffect(() => {
     Promise.all([
       request("/storefront/products"),
-      request("/storefront/demo-context"),
       initialProductId ? request(`/storefront/products/${initialProductId}`) : Promise.resolve(null),
     ])
-      .then(([catalogue, demo, detail]) => { setProducts(catalogue.items); setCategories(["All", ...catalogue.categories]); setContext(demo); if (detail) setSelected(detail); })
+      .then(([catalogue, detail]) => { setProducts(catalogue.items); setCategories(["All", ...catalogue.categories]); if (detail) setSelected(detail); })
       .catch((reason) => setError(reason.message))
       .finally(() => setLoading(false));
   }, [initialProductId]);
+
+  useEffect(() => {
+    if (!selected?.id) {
+      return;
+    }
+    let active = true;
+    request(`/storefront/products/${selected.id}/similar`)
+      .then((payload) => { if (active) setSimilarProducts(payload.items || []); })
+      .catch(() => { if (active) setSimilarProducts([]); });
+    return () => { active = false; };
+  }, [selected?.id]);
 
   async function refreshCart() {
     if (!auth?.user) {
@@ -1938,17 +1932,6 @@ export default function Storefront({ initialProductId = null }) {
     } catch { /* execute() already shows a toast on error */ }
   }
 
-  async function submitReview(productId, rating, text) {
-    requireAuth(async () => {
-      try {
-        await createReview({ product_id: productId, rating, text });
-        setToast("Review posted — Agent 4 is checking it in the background");
-      } catch (reason) {
-        setToast(reason.message || "Could not post this review");
-      }
-    });
-  }
-
   async function askQuestion(question) {
     if (!selected) return;
     const buyerId = auth?.user?.id || "B-001";
@@ -1984,14 +1967,19 @@ export default function Storefront({ initialProductId = null }) {
 
   async function verifyAddress() {
     requireAuth(async (buyerId) => {
-      const address = context?.address;
-      const rawAddr = addressRaw || address?.raw_address || "Hanuman Mandir ke peeche, gali no. 3";
-      const pin = addressPin || address?.expected_postal_pin || "495001";
-      const coords = address?.coordinates || { latitude: 22.0797, longitude: 82.1409 };
+      const address = addresses.find((item) => item.is_default) || addresses[0];
+      if (!address) {
+        setDrawer("addresses");
+        return;
+      }
+      const rawAddr = [address.address_line1, address.address_line2, address.locality, address.city]
+        .filter(Boolean)
+        .join(", ");
+      const pin = address.postal_pin;
+      const coords = { latitude: address.latitude, longitude: address.longitude };
       try {
         const payload = await execute("Agent 6 is checking coordinates, PIN and DIGIPIN…", () => postAndPoll("/address/verify", { buyer_id: buyerId, raw_address: rawAddr, postal_pin: pin, coordinates: coords }));
-        setVerifiedAddressId(payload.results.address_guardian?.data?.address_id || null);
-        setVerifiedAddress(true);
+        setToast(payload.results.address_guardian?.summary || "Address verified");
       } catch { /* execute() already shows a toast on error */ }
     });
   }
@@ -2002,9 +1990,10 @@ export default function Storefront({ initialProductId = null }) {
       const order = await createOrder(addressId, "cod");
       setLastOrderId(order.order_id);
       setLastOrderSummary({ amount: order.total_amount, paymentMode: "cod", address: addresses.find((item) => item.id === addressId) });
-      await execute(
-        "Agent 7 is simulating buyer confirmation…",
-        () => post(`/orders/${order.order_id}/confirm-simulated`, { decision: "confirmed" })
+      setToast(
+        order.delivery_confirmation_queued
+          ? "Order placed — Agent 7 delivery verification is queued"
+          : "Order placed, but delivery verification could not be queued"
       );
       await refreshCart();
       await refreshAccountData();
@@ -2043,16 +2032,17 @@ export default function Storefront({ initialProductId = null }) {
         handler: async function (response) {
           try {
             setBusy(true);
-            await post(`/orders/${orderData.order_id}/verify-payment`, {
+            const payment = await post(`/orders/${orderData.order_id}/verify-payment`, {
               razorpay_order_id: response.razorpay_order_id,
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_signature: response.razorpay_signature,
             });
             setLastOrderId(orderData.order_id);
             setLastOrderSummary({ amount: orderData.total_amount, paymentMode: "prepaid", address: selectedAddress });
-            await execute(
-              "Agent 7 is simulating buyer confirmation…",
-              () => post(`/orders/${orderData.order_id}/confirm-simulated`, { decision: "confirmed" })
+            setToast(
+              payment.delivery_confirmation_queued
+                ? "Payment verified — Agent 7 delivery verification is queued"
+                : "Payment verified, but delivery verification could not be queued"
             );
 
             await refreshCart();
@@ -2087,44 +2077,6 @@ export default function Storefront({ initialProductId = null }) {
     }
   }
 
-  async function checkReturn() {
-    try {
-      const payload = await execute("Agent 8 is comparing return evidence…", () => postAndPoll("/returns/analyze", { order_id: lastOrderId || "O-GOLDEN", video_key: "assets/mock/returns/return-approve.mp4", additional_image_keys: [] }));
-      const result = payload.results?.return_verifier;
-      setToast(result?.summary || "Return evidence is consistent — pickup can be scheduled");
-    } catch { /* execute() already shows a toast on error */ }
-  }
-
-  async function runAll() {
-    if (busy) return;
-    setTrust({ open: true, results: {}, message: "Supervisor is starting the full journey…" });
-    setBusy(true);
-    try {
-      const asyncWorkflows = new Set(["/listings/analyze", "/reviews/analyze", "/returns/analyze"]);
-      const flows = [
-        ["Agents 1–2 · listing and specs (real AI — Agent 1's image generation can take several minutes)", "/listings/analyze", { seller_id: "S-001", product_id: "P-001", image_keys: ["assets/mock/products/P-001.png"], seller_specs: GOLDEN_SPECS }],
-        ["Agents 3 & 5 · size and voice", "/voice/query", { buyer_id: "B-001", product_id: "P-001", text: "Mujhe kaunsa size lena chahiye?", language: "hi" }],
-        ["Agent 4 · review truth", "/reviews/analyze", { review_id: "RV-BAD", product_id: "P-001", image_key: "assets/mock/reviews/RV-BAD.png" }],
-        ["Agent 6 · address guardian", "/address/verify", { buyer_id: "B-001", raw_address: "Hanuman Mandir ke peeche, gali no. 3", postal_pin: "495001", coordinates: { latitude: 22.0797, longitude: 82.1409 } }],
-        ["Agent 7 · delivery confirmation", "/orders/O-GOLDEN/confirm-simulated", { decision: "confirmed" }],
-        ["Agent 8 · fair returns", "/returns/analyze", { order_id: "O-GOLDEN", video_key: "assets/mock/returns/return-approve.mp4", additional_image_keys: [] }],
-      ];
-      for (const [message, path, body] of flows) {
-        setTrust((current) => ({ ...current, message }));
-        const payload = asyncWorkflows.has(path)
-          ? await postAndPoll(path, body, { onTick: () => setTrust((current) => ({ ...current, message: `${message} (still working…)` })) })
-          : await post(path, body);
-        mergeResults(payload);
-      }
-      setToast("All 8 agents completed the protected journey");
-    } catch (reason) {
-      setToast(reason.message || "The safety tour stopped early");
-    } finally {
-      setBusy(false);
-      setTrust((current) => ({ ...current, message: "" }));
-    }
-  }
-
   if (initialProductId) {
     if (loading) return <div className="product-page-loading"><LoaderCircle className="spin" size={28} /><p>Loading verified product details…</p></div>;
     if (error || !selected) return <div className="product-page-loading"><ShieldCheck size={30} /><h1>Product unavailable</h1><p>{error || "This product could not be found."}</p><button className="primary-cta" type="button" onClick={() => router.push("/")}>Return to storefront</button></div>;
@@ -2132,6 +2084,7 @@ export default function Storefront({ initialProductId = null }) {
       <>
         <ProductPageView
           product={selected}
+          similarProducts={similarProducts}
           busy={busy}
           cart={cart}
           cartBusy={cartBusy}
@@ -2149,14 +2102,13 @@ export default function Storefront({ initialProductId = null }) {
           voiceAudioUrl={audioUrl(voiceAudioKey)}
           agentAnswer={agentAnswer}
           sizeSaathi={sizeSaathi ? { ...sizeSaathi, audioUrl: audioUrl(sizeSaathi.audioKey) } : null}
-          onSubmitReview={submitReview}
         />
         <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} />
-        <CheckoutDrawer open={drawer === "checkout"} context={context} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => setDrawer("orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => setDrawer("addresses")} buyerName={auth?.user?.name} />
+        <CheckoutDrawer open={drawer === "checkout"} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => setDrawer("orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => setDrawer("addresses")} buyerName={auth?.user?.name} />
         <AddressManagerDrawer open={drawer === "addresses"} onClose={() => { setDrawer(null); refreshAccountData(); }} buyerId={auth?.user?.id} />
         <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} />
         <ReturnVerificationDrawer open={drawer === "return-verify"} returnId={selectedReturnId} returns={returns} orders={orders} onClose={() => { setDrawer(null); refreshAccountData(); }} onRefreshData={refreshAccountData} />
-        <TrustDock trust={trust} busy={busy} onClose={() => setTrust((current) => ({ ...current, open: false }))} onRunAll={runAll} />
+        <TrustDock trust={trust} busy={busy} onClose={() => setTrust((current) => ({ ...current, open: false }))} />
         <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
         <ReviewSummaryDialog data={reviewSummary} onClose={() => setReviewSummary(null)} />
         {toast && <div className="toast" role="status" aria-live="polite"><Check size={16} /> {toast}</div>}
@@ -2200,8 +2152,8 @@ export default function Storefront({ initialProductId = null }) {
 
       <main id="top">
         <section className="hero">
-          <div className="hero-copy"><p><ShieldCheck size={14} /> INDIA&apos;S FIRST AGENT-PROTECTED SHOPPING DEMO</p><h1>Smart shopping.<br /><em>Safer at every step.</em></h1><span>Discover value-first products while eight Kavach Saathi agents verify listings, sizes, reviews, delivery and returns.</span><div><button className="hero-primary" type="button" onClick={() => document.querySelector("#products")?.scrollIntoView({ behavior: "smooth" })}>Shop protected deals <ArrowRight size={18} /></button><button className="hero-secondary" type="button" onClick={runAll} disabled={busy}>{busy ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />} Watch all 8 agents</button></div><small><Check size={13} /> Synthetic data <Check size={13} /> Groq-powered Q&A <Check size={13} /> Fair return policy</small></div>
-          <div className="hero-visual"><div className="hero-product"><img src="/mock-assets/products/P-001.png" alt="Maroon kurta mock product" /><span className="floating-check one"><Camera size={16} /><b>Image truth</b><small>Agent 1 passed</small></span><span className="floating-check two"><Sparkles size={16} /><b>Size XL</b><small>94% evidence</small></span><span className="floating-check three"><ShieldCheck size={16} /><b>Return fair</b><small>No auto-reject</small></span></div></div>
+          <div className="hero-copy"><p><ShieldCheck size={14} /> AGENT-PROTECTED SHOPPING</p><h1>Smart shopping.<br /><em>Safer at every step.</em></h1><span>Discover value-first products while eight Kavach Saathi agents verify listings, sizes, reviews, delivery and returns.</span><div><button className="hero-primary" type="button" onClick={() => document.querySelector("#products")?.scrollIntoView({ behavior: "smooth" })}>Shop protected deals <ArrowRight size={18} /></button><button className="hero-secondary" type="button" onClick={() => setTrust((current) => ({ ...current, open: true }))}><Sparkles size={17} /> View agent activity</button></div><small><Check size={13} /> Persistent evidence <Check size={13} /> Grounded AI <Check size={13} /> Fair return policy</small></div>
+          <div className="hero-visual"><div className="hero-product"><img src="/mock-assets/products/P-001.png" alt="Maroon hand-block kurta" /><span className="floating-check one"><Camera size={16} /><b>Image truth</b><small>Agent 1 passed</small></span><span className="floating-check two"><Sparkles size={16} /><b>Size XL</b><small>94% evidence</small></span><span className="floating-check three"><ShieldCheck size={16} /><b>Return fair</b><small>No auto-reject</small></span></div></div>
         </section>
 
         <section className="trust-ribbon">
@@ -2213,7 +2165,7 @@ export default function Storefront({ initialProductId = null }) {
         </section>
 
         <section className="catalogue-proof" aria-label="Catalogue data summary">
-          <div><strong>{products.length || 500}</strong><span>Detailed mock products</span></div>
+          <div><strong>{products.length || 500}</strong><span>Detailed products</span></div>
           <div><strong>50</strong><span>Products in every category</span></div>
           <div><strong>{Math.max(categories.length - 1, 10)}</strong><span>Marketplace categories</span></div>
           <div><strong>1,000</strong><span>Review evidence records</span></div>
@@ -2232,12 +2184,12 @@ export default function Storefront({ initialProductId = null }) {
         </section>
       </main>
 
-      <footer className="site-footer"><a className="logo inverse" href="#top"><span>K</span><div><strong>Kavach</strong><small>SAATHI SHOP</small></div></a><p>Built over a Meesho-style commerce journey with deterministic synthetic data.</p><div><button type="button" onClick={() => setTrust((current) => ({ ...current, open: true }))}>Agent activity</button><a href="http://localhost:8000/docs" target="_blank" rel="noreferrer">API docs</a><button type="button" onClick={checkReturn}>Return demo</button></div></footer>
+      <footer className="site-footer"><a className="logo inverse" href="#top"><span>K</span><div><strong>Kavach</strong><small>SAATHI SHOP</small></div></a><p>Agent-protected commerce with persistent evidence and auditable decisions.</p><div><button type="button" onClick={() => setTrust((current) => ({ ...current, open: true }))}>Agent activity</button><a href="http://localhost:8000/docs" target="_blank" rel="noreferrer">API docs</a></div></footer>
 
       <button className="floating-saathi" type="button" onClick={() => setTrust((current) => ({ ...current, open: !current.open }))}><ShieldCheck size={20} /><span><strong>Kavach Saathi</strong><small>{busy ? "Agents working…" : `${Object.keys(trust.results).length}/8 checks visible`}</small></span></button>
-      <TrustDock trust={trust} busy={busy} onClose={() => setTrust((current) => ({ ...current, open: false }))} onRunAll={runAll} />
+      <TrustDock trust={trust} busy={busy} onClose={() => setTrust((current) => ({ ...current, open: false }))} />
       <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} />
-      <CheckoutDrawer open={drawer === "checkout"} context={context} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => setDrawer("orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => setDrawer("addresses")} buyerName={auth?.user?.name} />
+      <CheckoutDrawer open={drawer === "checkout"} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => setDrawer("orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => setDrawer("addresses")} buyerName={auth?.user?.name} />
       <AddressManagerDrawer open={drawer === "addresses"} onClose={() => { setDrawer(null); refreshAccountData(); }} buyerId={auth?.user?.id} />
       <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} />
       <ReturnVerificationDrawer open={drawer === "return-verify"} returnId={selectedReturnId} returns={returns} orders={orders} onClose={() => { setDrawer(null); refreshAccountData(); }} onRefreshData={refreshAccountData} />

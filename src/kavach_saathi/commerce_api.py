@@ -392,10 +392,13 @@ async def create_order(
         if payload.payment_mode == "cod":
             session.delete(cart_item)
 
+    delivery_confirmation_queued = False
     if payload.payment_mode == "cod":
         session.add(OrderStatusHistory(order_id=order_id, status=OrderStatus.PLACED, actor="system"))
         session.commit()
-        publish_event(ORDER_PLACED_STREAM, {"order_id": order_id, "buyer_id": user.id})
+        delivery_confirmation_queued = bool(
+            publish_event(ORDER_PLACED_STREAM, {"order_id": order_id, "buyer_id": user.id})
+        )
     else:
         try:
             razorpay_order = RazorpayClient(cfg).create_order(amount_rupees=total_amount, receipt=order_id)
@@ -420,6 +423,7 @@ async def create_order(
         "status": order.status,
         "total_amount": total_amount,
         "payment_mode": payload.payment_mode,
+        "delivery_confirmation_queued": delivery_confirmation_queued,
         "razorpay": (
             {
                 "razorpay_order_id": razorpay_order["id"],
@@ -468,9 +472,17 @@ async def verify_payment(
 
     finalized = _finalize_prepaid_order(session, order, payment, payload.razorpay_payment_id)
     session.commit()
+    delivery_confirmation_queued = False
     if finalized:
-        publish_event(ORDER_PLACED_STREAM, {"order_id": order_id, "buyer_id": user.id})
-    return {"order_id": order_id, "payment_status": payment.status, "status": order.status}
+        delivery_confirmation_queued = bool(
+            publish_event(ORDER_PLACED_STREAM, {"order_id": order_id, "buyer_id": user.id})
+        )
+    return {
+        "order_id": order_id,
+        "payment_status": payment.status,
+        "status": order.status,
+        "delivery_confirmation_queued": delivery_confirmation_queued,
+    }
 
 
 @router.get("/orders/{order_id}/payment-status")

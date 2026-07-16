@@ -33,13 +33,14 @@ test("buyer can sign up, browse, add to cart, verify address, and place a real o
   await sizeButtons.first().click();
   await page.getByRole("button", { name: "Add to cart" }).click();
   await expect(page.getByText(/added to cart/i)).toBeVisible();
-  await expect(page.getByLabel("Current quantity")).toHaveText("1");
+  const productQuantity = page.getByRole("main").getByLabel("Current quantity");
+  await expect(productQuantity).toHaveText("1");
 
   // Quantity controls write through to the backend and render the returned cart.
-  await page.getByRole("button", { name: "Increase quantity" }).click();
-  await expect(page.getByLabel("Current quantity")).toHaveText("2");
-  await page.getByRole("button", { name: "Decrease quantity" }).click();
-  await expect(page.getByLabel("Current quantity")).toHaveText("1");
+  await page.getByRole("main").getByRole("button", { name: "Increase quantity" }).click();
+  await expect(productQuantity).toHaveText("2");
+  await page.getByRole("main").getByRole("button", { name: "Decrease quantity" }).click();
+  await expect(productQuantity).toHaveText("1");
 
   // The full product page exposes a direct cart action; checkout remains a real
   // POST /v1/orders, not a fixture confirmation.
@@ -65,7 +66,7 @@ test("buyer can sign up, browse, add to cart, verify address, and place a real o
   await expect(page.getByText("Address saved successfully!")).toBeVisible({ timeout: 30_000 });
   await page.getByRole("dialog", { name: "Manage Addresses" }).getByRole("button", { name: "Close" }).click();
 
-  await page.locator(".utility-nav").getByRole("button", { name: /Cart/ }).click();
+  await page.getByRole("button", { name: /Open cart with/ }).click();
   await page.getByRole("button", { name: "Continue to secure checkout" }).click();
   await page.getByRole("button", { name: "Confirm availability & place COD order" }).click();
 

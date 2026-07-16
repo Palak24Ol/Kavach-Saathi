@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import time
 from typing import Literal
 
 from pydantic import BaseModel, Field
 
 from kavach_saathi.agents.base import Agent
+from kavach_saathi.agent_logging import log_agent_call
+from kavach_saathi.db.base import SessionLocal
 from kavach_saathi.config import get_settings
 from kavach_saathi.digipin import encode
 from kavach_saathi.models import (
@@ -95,6 +98,7 @@ class AddressGuardianAgent(Agent):
         return hmac.compare_digest(stored_digest, self.otp_digest(submitted_code))
 
     async def run(self, request: AddressVerifyRequest) -> AgentResult:
+        started_at = time.perf_counter()
         geocode_error: str | None = None
         try:
             geo = await self.geocoder.reverse_geocode(request.coordinates.latitude, request.coordinates.longitude)
@@ -195,7 +199,7 @@ class AddressGuardianAgent(Agent):
                 )
             )
 
-        return AgentResult(
+        result = AgentResult(
             agent=AgentName.ADDRESS_GUARDIAN,
             status=run_status,
             confidence=confidence,
@@ -234,3 +238,21 @@ class AddressGuardianAgent(Agent):
             },
             user_message={"en": summary, "hi": f"Pata {status_val} hai: {reason}"},
         )
+        with SessionLocal() as session:
+            log_agent_call(
+                session,
+                agent_name="address_guardian",
+                entity_type="buyer",
+                entity_id=request.buyer_id,
+                confidence=confidence,
+                latency_ms=round((time.perf_counter() - started_at) * 1000),
+                input_ref=raw_address_text,
+                provider=(
+                    f"google_maps+{self.context.reasoner.name}"
+                    if not geocode_error
+                    else "google_maps_unavailable"
+                ),
+                output_json=result.data,
+            )
+            session.commit()
+        return result

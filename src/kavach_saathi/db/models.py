@@ -344,6 +344,18 @@ class AgentLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class WorkflowRun(Base):
+    """Durable orchestration state used by every agent workflow."""
+
+    __tablename__ = "workflow_runs"
+
+    run_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
 class BuyerTrustSignal(Base):
     __tablename__ = "buyer_trust_signals"
 

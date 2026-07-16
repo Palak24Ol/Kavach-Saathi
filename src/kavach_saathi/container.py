@@ -28,7 +28,7 @@ from kavach_saathi.providers.reasoning import (
     ReasoningProvider,
 )
 from kavach_saathi.repository import CommerceRepository
-from kavach_saathi.store import DynamoDBWorkflowStore, MemoryWorkflowStore
+from kavach_saathi.store import PostgresWorkflowStore
 
 
 def _select_reasoner(settings: Settings) -> ReasoningProvider:
@@ -65,12 +65,11 @@ class Container:
             reasoner = _select_reasoner(settings)
             media = BedrockMediaProvider(settings)
             external = LiveExternalProvider(settings)
-            store = DynamoDBWorkflowStore(settings.workflow_table, settings.aws_region)
         else:
             reasoner = _select_reasoner(settings)
             media = DemoMediaProvider(settings)
             external = DemoExternalProvider()
-            store = MemoryWorkflowStore()
+        store = PostgresWorkflowStore()
 
         context = AgentContext(
             settings=settings,

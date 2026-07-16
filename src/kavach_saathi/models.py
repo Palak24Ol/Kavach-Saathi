@@ -19,7 +19,6 @@ class WorkflowType(StrEnum):
     REVIEW_SUMMARY = "review_summary"
     VOICE = "voice"
     ADDRESS = "address"
-    CONFIRMATION = "confirmation"
     RETURN = "return"
 
 
@@ -310,13 +309,6 @@ class AddressVerifyRequest(BaseModel):
     state: str | None = None
     country: str | None = None
     address_type: str | None = None
-
-
-class ConfirmationRequest(BaseModel):
-    decision: Literal["confirmed", "reschedule", "cancel", "update_address"]
-    scheduled_date: str | None = None
-    updated_address: AddressVerifyRequest | None = None
-    idempotency_key: str | None = None
 
 
 class ReturnAnalyzeRequest(BaseModel):

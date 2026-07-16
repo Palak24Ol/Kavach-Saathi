@@ -20,7 +20,6 @@ from kavach_saathi.models import (
     AddressVerifyRequest,
     AgentName,
     AgentResult,
-    ConfirmationRequest,
     ListingAnalyzeRequest,
     ReturnAnalyzeRequest,
     ReviewAnalyzeRequest,
@@ -76,7 +75,6 @@ class AgentGraphs:
         self.review_summary_workflow = self._single_graph("review_summary", self._review_summary_node)
         self.voice_workflow = self._voice_graph()
         self.address_workflow = self._single_graph("address", self._address_node)
-        self.confirmation_workflow = self._confirmation_graph()
         self.return_workflow = self._single_graph("return", self._return_node)
 
     async def _catalogue_node(self, state: WorkflowState) -> dict[str, Any]:
@@ -133,13 +131,6 @@ class AgentGraphs:
         if "updated_address" in raw and raw.get("updated_address"):
             raw = raw["updated_address"]
         result = await self.address.run(AddressVerifyRequest.model_validate(raw))
-        return {
-            "results": {result.agent.value: result},
-            "events": [event(result.agent, result.summary)],
-        }
-
-    async def _confirmation_node(self, state: WorkflowState) -> dict[str, Any]:
-        result = await self.confirmation.run(state["order_id"], ConfirmationRequest.model_validate(state["request"]))
         return {
             "results": {result.agent.value: result},
             "events": [event(result.agent, result.summary)],
@@ -203,23 +194,6 @@ class AgentGraphs:
         )
         graph.add_edge("size_translator", "voice_qa")
         graph.add_edge("voice_qa", END)
-        return graph.compile()
-
-    @staticmethod
-    def _confirmation_route(state: WorkflowState) -> str:
-        return "address" if state["request"].get("decision") == "update_address" else "done"
-
-    def _confirmation_graph(self):
-        graph = StateGraph(WorkflowState)
-        graph.add_node("delivery_confirmation", self._confirmation_node)
-        graph.add_node("address_guardian", self._address_node)
-        graph.add_edge(START, "delivery_confirmation")
-        graph.add_conditional_edges(
-            "delivery_confirmation",
-            self._confirmation_route,
-            {"address": "address_guardian", "done": END},
-        )
-        graph.add_edge("address_guardian", END)
         return graph.compile()
 
     @staticmethod
