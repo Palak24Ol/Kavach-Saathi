@@ -20,22 +20,22 @@ class SpecSubmitMissingRequest(BaseModel):
     fields: dict[str, Any]
 
 
-def _source_image_key(container: Container, product_id: str) -> str:
-    product = container.repository.get("products", product_id)
-    return product["media"]["primary"]
-
-
 @router.post("/agents/spec-enforcer/extract")
 async def spec_extract(payload: SpecExtractRequest, container: Container = Depends(get_container)):
     """Plan-literal endpoint (final target plan.md Section 6, Agent 2) -- runs the same
     Claude OCR + CLIP/ResNet-50 pipeline as the `/listings/analyze` fan-out, addressable
     on its own so a judge (or the seller portal) can call it directly per the spec."""
-    image_key = _source_image_key(container, payload.product_id)
+    product = container.repository.get("products", payload.product_id)
     request = ListingAnalyzeRequest(
-        seller_id=container.repository.get("products", payload.product_id)["seller_id"],
+        seller_id=product["seller_id"],
         product_id=payload.product_id,
-        image_keys=[image_key],
-        seller_specs={},
+        image_keys=[product["media"]["primary"]],
+        # The seller's originally-declared values (product.spec_json, exposed here as
+        # product["specs"]) -- without this, seller_specs was always {}, so Agent 2's
+        # "applicable_fields = fields the seller actually declared" check always came
+        # back empty and the needs_evidence/pending_seller_input path could never fire,
+        # no matter what the listing actually looked like.
+        seller_specs=product["specs"] or {},
     )
     result = await container.service.graphs.specs.run(request)
     return {
