@@ -52,6 +52,22 @@ def _buyer_dict(user: User) -> dict[str, Any]:
     }
 
 
+_SIZE_ORDER = ["XS", "S", "M", "L", "XL", "XXL", "XXXL"]
+
+
+def _ordered_size_chart(size_chart: dict[str, Any]) -> dict[str, Any]:
+    """Postgres's JSONB column type does not preserve key insertion order on read
+    (unlike JSON) -- a chart written as XS/S/M/L/XL/XXL can come back in a different
+    order every time, which showed up live as size buttons rendering L, M, S, XL...
+    instead of small-to-large. Re-sorting here by a fixed canonical order, rather than
+    trusting dict iteration order end to end, fixes it regardless of what JSONB
+    happens to return."""
+    return {
+        size: size_chart[size]
+        for size in sorted(size_chart, key=lambda s: _SIZE_ORDER.index(s) if s in _SIZE_ORDER else len(_SIZE_ORDER))
+    }
+
+
 def _product_dict(product: Product) -> dict[str, Any]:
     return {
         "id": product.id,
@@ -79,7 +95,7 @@ def _product_dict(product: Product) -> dict[str, Any]:
         "label_backed_fields": product.label_backed_fields,
         "spec_source": product.spec_source,
         "stolen_photo_flag": product.stolen_photo_flag,
-        "size_chart": product.size_chart,
+        "size_chart": _ordered_size_chart(product.size_chart),
         "return_window_days": product.return_window_days,
         "media": {"primary": product.media_primary, "care_label": product.media_care_label},
     }

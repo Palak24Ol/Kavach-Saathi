@@ -332,6 +332,11 @@ def make_products() -> list[dict]:
                     else:
                         product_materials = ["BPA-Free Plastic", "Wood", "Paper and Foam"]
                         product_sized = False
+                elif category == "Popular":
+                    # First 4 items (Kurta Set, Saree, Shirt, Co-ord) are garments and
+                    # should get a real size chart; the rest (storage, bags, footwear,
+                    # jewellery, skincare, kids kit) are non-garment and stay unsized.
+                    product_sized = item_index < 4
                 material = product_materials[(item_index + variant_index) % len(product_materials)]
                 occasion = config["occasions"][(item_index + variant_index) % len(config["occasions"])]
                 brand = config["brands"][(item_index + variant_index) % len(config["brands"])]
