@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
+import io
 import json
 import logging
 import secrets
@@ -35,6 +37,7 @@ from kavach_saathi.db.models import (
     WishlistItem,
 )
 from kavach_saathi.events import ORDER_PLACED_STREAM, REVIEW_SUBMITTED_STREAM, publish_event
+from kavach_saathi.media_storage import read_image_bytes
 from kavach_saathi.models import (
     AddressCreateRequest,
     AddressGeocodeRequest,
@@ -49,15 +52,85 @@ from kavach_saathi.models import (
     OtpVerifyRequest,
     PaymentVerifyRequest,
     ReturnCreateRequest,
+    ReturnImageAttemptRequest,
     ReviewCreateRequest,
     WorkflowType,
 )
 from kavach_saathi.order_status import OrderStatus
 from kavach_saathi.providers.google_maps import GoogleMapsUnavailable
 from kavach_saathi.providers.razorpay_provider import RazorpayClient, RazorpayUnavailable
+from kavach_saathi.providers.return_vision import ReturnVisionVerifier
+from kavach_saathi.redis_client import get_redis
 
 router = APIRouter()
 _require_buyer = require_role("buyer")
+
+
+def validate_phone_with_lookup(phone: str, country: str | None, cfg: Settings) -> dict:
+    from kavach_saathi.providers.twilio_integration import TwilioIntegrationClient
+
+    twilio_integration = TwilioIntegrationClient(cfg)
+
+    country_map = {
+        "india": "IN",
+        "united states": "US",
+        "us": "US",
+        "united kingdom": "GB",
+        "uk": "GB",
+    }
+    selected_country = (country or "India").strip().lower()
+    country_code = country_map.get(selected_country, "IN")
+
+    try:
+        lookup_res = twilio_integration.lookup_phone(phone, country_code)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    is_valid = (
+        lookup_res.get("valid") is True
+        and lookup_res.get("country_code", "").upper() == country_code.upper()
+        and lookup_res.get("line_type")
+        in (
+            "mobile",
+            "voip",
+            "personal",
+            "fixed_line_or_mobile",
+            "fixed-line-or-mobile",
+        )
+    )
+    if lookup_res.get("valid") is not True:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Invalid phone number according to carrier validation.",
+                "errors": {"phone": "Invalid phone number according to carrier validation."}
+            }
+        )
+    if lookup_res.get("country_code", "").upper() != country_code.upper():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": f"Phone number country code mismatch: expected {country_code}, got {lookup_res.get('country_code') or 'unknown'}.",
+                "errors": {"phone": f"Phone number country code mismatch: expected {country_code}, got {lookup_res.get('country_code') or 'unknown'}."}
+            }
+        )
+    valid_line_types = (
+        "mobile",
+        "voip",
+        "personal",
+        "fixed_line_or_mobile",
+        "fixed-line-or-mobile",
+    )
+    if lookup_res.get("line_type") not in valid_line_types:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": f"Unsupported line type: {lookup_res.get('line_type') or 'unknown'}.",
+                "errors": {"phone": f"Unsupported line type: {lookup_res.get('line_type') or 'unknown'}."}
+            }
+        )
+    return lookup_res
+
 
 # A per-item return can move the whole order out of DELIVERED (e.g. into
 # RETURN_INITIATED) while other items in the same order are still eligible for
@@ -92,6 +165,8 @@ def _address_out(address: Address) -> dict:
         "digipin": address.digipin,
         "address_type": address.address_type,
         "phone_verified": address.phone_verified,
+        "phone_lookup_validated": address.phone_lookup_validated,
+        "lookup_status": address.lookup_status,
         "validation_status": address.validation_status,
         "validation_explanation": address.validation_explanation,
         "is_default": address.is_default,
@@ -327,8 +402,15 @@ def _finalize_prepaid_order(session: Session, order: Order, payment: Payment, pa
         if cart_item:
             session.delete(cart_item)
 
-    order.status = OrderStatus.PLACED
-    session.add(OrderStatusHistory(order_id=order.id, status=OrderStatus.PLACED, actor="system"))
+    order.status = OrderStatus.AWAITING_BUYER_CONFIRMATION
+    order.whatsapp_workflow_state = "awaiting_order_confirmation"
+    session.add(
+        OrderStatusHistory(
+            order_id=order.id,
+            status=OrderStatus.AWAITING_BUYER_CONFIRMATION,
+            actor="system",
+        )
+    )
 
     payment.status = "captured"
     payment.provider_payment_id = payment_id
@@ -347,9 +429,9 @@ async def create_order(
     if not address or address.user_id != user.id:
         raise HTTPException(status_code=404, detail="Address not found")
 
-    # Checkout validation rules (phone verified, valid status, digipin present)
-    if not address.phone_verified:
-        raise HTTPException(status_code=400, detail="Address phone number is not verified via OTP")
+    # Checkout validation rules (phone validated by carrier lookup, valid status, digipin present)
+    if not address.phone_lookup_validated:
+        raise HTTPException(status_code=400, detail="Address phone number is not validated by carrier lookup")
     if address.validation_status != "valid":
         raise HTTPException(status_code=400, detail="Address has not passed validation agent check")
     if not address.digipin:
@@ -376,8 +458,10 @@ async def create_order(
     order_id = f"O-{uuid4().hex[:10].upper()}"
     total_amount = round(sum(variant.price * cart_item.qty for cart_item, variant, _ in resolved), 2)
 
-    # Prepaid order starts as draft OrderStatus.CART, COD order finalized immediately
-    status = OrderStatus.CART if payload.payment_mode == "prepaid" else OrderStatus.PLACED
+    # Prepaid orders remain drafts until payment is captured. COD orders immediately
+    # enter the persisted WhatsApp confirmation workflow; neither path is delivered
+    # until delivery evidence and buyer OTP verification are complete.
+    status = OrderStatus.CART if payload.payment_mode == "prepaid" else OrderStatus.AWAITING_BUYER_CONFIRMATION
 
     order = Order(
         id=order_id,
@@ -387,6 +471,7 @@ async def create_order(
         total_amount=total_amount,
         payment_mode=payload.payment_mode,
         address_snapshot=_address_snapshot(address, user.name),
+        whatsapp_workflow_state=("awaiting_order_confirmation" if payload.payment_mode == "cod" else None),
     )
 
     session.add(order)
@@ -409,7 +494,13 @@ async def create_order(
 
     delivery_confirmation_queued = False
     if payload.payment_mode == "cod":
-        session.add(OrderStatusHistory(order_id=order_id, status=OrderStatus.PLACED, actor="system"))
+        session.add(
+            OrderStatusHistory(
+                order_id=order_id,
+                status=OrderStatus.AWAITING_BUYER_CONFIRMATION,
+                actor="system",
+            )
+        )
         session.commit()
         delivery_confirmation_queued = bool(
             publish_event(ORDER_PLACED_STREAM, {"order_id": order_id, "buyer_id": user.id})
@@ -723,6 +814,12 @@ async def list_my_returns(
             "replacement_order_id": row.replacement_order_id,
             "evidence_images": row.evidence_images,
             "evidence_checks": row.evidence_checks,
+            "buyer_front_image": row.buyer_front_image,
+            "buyer_back_image": row.buyer_back_image,
+            "similarity_front": row.similarity_front,
+            "similarity_back": row.similarity_back,
+            "similarity_aggregate": row.similarity_aggregate,
+            "attempt_history": row.attempt_history,
             "status_timeline": row.status_timeline,
             "decided_at": row.decided_at,
             "created_at": row.created_at,
@@ -792,17 +889,185 @@ async def create_return_request(
     }
 
 
+async def _read_valid_return_image(key: str, cfg: Settings) -> bytes:
+    from PIL import Image
+
+    if not key.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+        raise HTTPException(status_code=400, detail="Return evidence must be a JPG, PNG, or WebP image")
+    try:
+        content = await read_image_bytes(key, cfg)
+        if not content or len(content) > 15 * 1024 * 1024:
+            raise ValueError("image is empty or exceeds 15 MB")
+        with Image.open(io.BytesIO(content)) as image:
+            image.verify()
+        with Image.open(io.BytesIO(content)) as image:
+            if image.width < 200 or image.height < 200:
+                raise ValueError("image dimensions must be at least 200 x 200")
+    except (OSError, ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid return image: {exc}") from exc
+    return content
+
+
+def _return_similarity(reference: bytes, candidate: bytes) -> float:
+    score, _ = ReturnVisionVerifier().best_match([candidate], reference)
+    return round(max(0.0, min(1.0, score)) * 100, 2)
+
+
+@router.post("/returns/{return_id}/image-attempt")
+async def submit_return_image_attempt(
+    return_id: str,
+    payload: ReturnImageAttemptRequest,
+    user: Annotated[User, Depends(_require_buyer)],
+    cfg: Settings = Depends(get_settings),
+    session: Session = Depends(get_session),
+):
+    record = session.get(ReturnRecord, return_id)
+    if not record or record.buyer_id != user.id:
+        raise HTTPException(status_code=404, detail="Return request not found")
+    if record.status not in {"pending_evidence", "needs_evidence"}:
+        raise HTTPException(status_code=409, detail="This return no longer accepts evidence")
+    attempts = list(record.attempt_history or [])
+    if len(attempts) >= 3:
+        raise HTTPException(status_code=409, detail="Maximum of three evidence attempts reached")
+    try:
+        accepted = get_redis().set(
+            f"idempotency:return-attempt:{return_id}:{payload.idempotency_key}",
+            "processing",
+            nx=True,
+            ex=600,
+        )
+        if not accepted:
+            raise HTTPException(status_code=409, detail="This evidence attempt is already being processed")
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+    item = (
+        session.execute(
+            select(OrderItem).where(
+                OrderItem.order_id == record.order_id,
+                OrderItem.product_id == record.product_id,
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if not item or not item.delivery_front_image or not item.delivery_back_image:
+        raise HTTPException(status_code=409, detail="Delivery front/back evidence is unavailable for this item")
+
+    buyer_front, buyer_back, delivery_front, delivery_back = await asyncio.gather(
+        _read_valid_return_image(payload.front_image_key, cfg),
+        _read_valid_return_image(payload.back_image_key, cfg),
+        _read_valid_return_image(item.delivery_front_image, cfg),
+        _read_valid_return_image(item.delivery_back_image, cfg),
+    )
+
+    from kavach_saathi.providers.return_provider import ReturnComparisonProvider
+
+    comparison_provider = ReturnComparisonProvider(cfg)
+    try:
+        front_res, back_res = await asyncio.gather(
+            comparison_provider.compare(
+                delivered_image_bytes=delivery_front,
+                returned_image_bytes=buyer_front,
+                comparison_type="front",
+            ),
+            comparison_provider.compare(
+                delivered_image_bytes=delivery_back,
+                returned_image_bytes=buyer_back,
+                comparison_type="back",
+            ),
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"message": "Image verification is temporarily unavailable. Please retry; this attempt was not counted.", "code": "provider_unavailable"},
+        ) from exc
+
+    front_score = front_res.visual_similarity_score
+    back_score = back_res.visual_similarity_score
+    aggregate = round((front_score + back_score) / 2, 2)
+    passed = aggregate >= 60
+
+    attempt = {
+        "attempt": len(attempts) + 1,
+        "created_at": datetime.now(UTC).isoformat(),
+        "front_image_key": payload.front_image_key,
+        "back_image_key": payload.back_image_key,
+        "front_sha256": hashlib.sha256(buyer_front).hexdigest(),
+        "back_sha256": hashlib.sha256(buyer_back).hexdigest(),
+        "similarity_front": front_score,
+        "similarity_back": back_score,
+        "similarity_aggregate": aggregate,
+        "front_provider": front_res.provider,
+        "front_model": front_res.model,
+        "back_provider": back_res.provider,
+        "back_model": back_res.model,
+        "front_differences": front_res.visible_differences,
+        "back_differences": back_res.visible_differences,
+        "passed": passed,
+    }
+    attempts.append(attempt)
+    record.attempt_history = attempts
+    record.buyer_front_image = payload.front_image_key
+    record.buyer_back_image = payload.back_image_key
+    record.evidence_images = [payload.front_image_key, payload.back_image_key]
+    record.similarity_front = front_score
+    record.similarity_back = back_score
+    record.similarity_aggregate = aggregate
+    record.confidence_score = round(aggregate)
+    if passed:
+        record.status = "pending_return"
+        record.pickup_status = "pending"
+        record.decision = "evidence_matched"
+    elif len(attempts) >= 3:
+        record.status = "evidence_mismatch"
+        record.decision = "declined_evidence_mismatch"
+        record.decided_at = datetime.now(UTC)
+    else:
+        record.status = "needs_evidence"
+    session.commit()
+
+    remaining = max(0, 3 - len(attempts))
+    if passed:
+        message = "Images matched. Return pickup is now pending."
+    elif remaining:
+        message = "The images do not clearly match. Retake clear, well-lit front and back photos."
+    else:
+        message = "Return declined after three mismatched attempts. Contact customer care for help."
+    return {
+        "passed": passed,
+        "status": record.status,
+        "attempts_used": len(attempts),
+        "attempts_remaining": remaining,
+        "similarity_front": front_score,
+        "similarity_back": back_score,
+        "similarity_aggregate": aggregate,
+        "message": message,
+        "support_path": "/support" if record.status == "evidence_mismatch" else None,
+    }
+
+
 @router.post("/reviews", status_code=201)
 async def create_review(
     payload: ReviewCreateRequest,
     user: Annotated[User, Depends(_require_buyer)],
     session: Session = Depends(get_session),
+    container: Container = Depends(get_container),
 ):
     product = session.get(Product, payload.product_id)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
 
-    # Check that the user has a delivered order containing this product
+    # Before validation: check text length and image requirements
+    trimmed_text = payload.text.strip() if payload.text else ""
+    if not trimmed_text or len(trimmed_text) < 10:
+        raise HTTPException(status_code=400, detail="Review text must be at least 10 characters long.")
+    if not payload.image_key or not payload.image_key.strip():
+        raise HTTPException(status_code=400, detail="Exactly one review image is required.")
+
+    # Check that the user has a confirmed delivered order containing this product
     POST_DELIVERY_STATUSES = {
         OrderStatus.DELIVERED,
         OrderStatus.RETURN_INITIATED,
@@ -828,7 +1093,7 @@ async def create_review(
     )
     if not has_delivered_order:
         raise HTTPException(
-            status_code=403, detail="You can only review products you have purchased and had delivered."
+            status_code=400, detail="You can only review products you have purchased and had delivered."
         )
 
     # Check for duplicate review by the same buyer for this product
@@ -840,6 +1105,49 @@ async def create_review(
     if duplicate:
         raise HTTPException(status_code=409, detail="You have already submitted a review for this product.")
 
+    # Fetch image bytes for verification
+    from kavach_saathi.media_storage import read_image_bytes
+    from kavach_saathi.providers.review_provider import ReviewVerificationProvider
+
+    try:
+        catalogue_bytes = await read_image_bytes(product.media_primary, container.settings)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to load catalogue primary image: {exc}"
+        )
+
+    try:
+        review_image_bytes = await read_image_bytes(payload.image_key, container.settings)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to load uploaded review image: {exc}"
+        )
+
+    provider = ReviewVerificationProvider(container.settings)
+    try:
+        res = await provider.verify(
+            catalogue_image_bytes=catalogue_bytes,
+            review_image_bytes=review_image_bytes,
+            product_title=product.title,
+            product_specs=json.dumps(product.spec_json or {}),
+            review_text=payload.text,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"message": "Review verification is temporarily unavailable. Please retry later.", "code": "provider_unavailable"},
+        ) from exc
+
+    if not res.overall_passed:
+        errors = {}
+        if not res.product_image_match_passed:
+            errors["image_key"] = "The uploaded image does not appear to show this product."
+        if not res.text_quality_passed:
+            errors["text"] = "Please replace unrelated, random, or incomplete text with your actual product experience."
+        if not res.image_text_match_passed:
+            errors["text"] = "Your text describes a different item than the uploaded image."
+        raise HTTPException(status_code=422, detail={"message": "Please correct the highlighted review fields.", "errors": errors})
+
     review_id = f"RV-{uuid4().hex[:10].upper()}"
     review = Review(
         id=review_id,
@@ -850,16 +1158,25 @@ async def create_review(
         text=payload.text,
         media=payload.image_key,
         is_hidden_by_agent=False,
-        awaiting_analysis=True,
+        awaiting_analysis=False,
+        validation_provider=res.provider,
+        validation_model=res.model,
+        product_image_match_passed=res.product_image_match_passed,
+        product_image_match_confidence=res.product_image_match_confidence,
+        product_image_match_reason=res.product_image_match_reason,
+        image_text_match_passed=res.image_text_match_passed,
+        image_text_match_confidence=res.image_text_match_confidence,
+        image_text_match_reason=res.image_text_match_reason,
+        text_quality_passed=res.text_quality_passed,
+        text_quality_classification=res.text_quality_classification,
+        text_quality_reason=res.text_quality_reason,
+        overall_passed=res.overall_passed,
     )
     session.add(review)
 
     total_rating = product.rating * product.review_count + payload.rating
     product.review_count += 1
     product.rating = round(total_rating / product.review_count, 2)
-    # Commit before publishing -- see the matching comment in create_order() above;
-    # Agent 4's review-truth consumer can otherwise query this review before it's
-    # durably committed.
     session.commit()
 
     event_published = publish_event(
@@ -1030,20 +1347,17 @@ async def reverse_geocode_address(
 async def add_address(
     payload: AddressCreateRequest,
     user: Annotated[User, Depends(_require_buyer)],
+    cfg: Settings = Depends(get_settings),
     container=Depends(get_container),
 ):
-    verified_session = container.repository.get_verified_phone_session(
-        user.id, payload.phone, payload.verification_session_id
-    )
-    if not verified_session:
-        raise HTTPException(status_code=400, detail="Phone number is not verified. Please verify via OTP first.")
+    lookup_res = validate_phone_with_lookup(payload.phone, payload.country, cfg)
 
     verify_req = AddressVerifyRequest(
         buyer_id=user.id,
         postal_pin=payload.postal_pin,
         coordinates=Coordinates(latitude=payload.latitude, longitude=payload.longitude),
         recipient_name=payload.recipient_name,
-        phone=payload.phone,
+        phone=lookup_res["normalized_number"],
         address_line1=payload.address_line1,
         address_line2=payload.address_line2,
         locality=payload.locality,
@@ -1084,14 +1398,17 @@ async def add_address(
         longitude=res.data["longitude"],
         digipin=res.data["digipin"],
         recipient_name=payload.recipient_name,
-        phone=payload.phone,
+        phone=lookup_res["normalized_number"],
         address_line1=payload.address_line1,
         address_line2=payload.address_line2,
         locality=payload.locality,
         district=payload.district,
         country=payload.country,
         address_type=payload.address_type,
-        phone_verified=True,
+        phone_verified=False,
+        phone_lookup_validated=True,
+        lookup_status="lookup_validated",
+        lookup_data=lookup_res,
         validation_status=validation_status,
         validation_explanation=validation_explanation,
         is_default=payload.is_default or not existing,
@@ -1105,20 +1422,16 @@ async def update_address(
     address_id: str,
     payload: AddressUpdateRequest,
     user: Annotated[User, Depends(_require_buyer)],
+    cfg: Settings = Depends(get_settings),
     container=Depends(get_container),
 ):
     addr = container.repository.get_address(address_id)
     if not addr or addr.user_id != user.id:
         raise HTTPException(status_code=404, detail="Address not found")
 
+    lookup_res = None
     if payload.phone and payload.phone != addr.phone:
-        if not payload.verification_session_id:
-            raise HTTPException(status_code=400, detail="New phone number must be verified via OTP.")
-        verified_session = container.repository.get_verified_phone_session(
-            user.id, payload.phone, payload.verification_session_id
-        )
-        if not verified_session:
-            raise HTTPException(status_code=400, detail="New phone number is not verified via OTP.")
+        lookup_res = validate_phone_with_lookup(payload.phone, payload.country or addr.country, cfg)
 
     fields_changed = any(
         getattr(payload, k) is not None and getattr(payload, k) != getattr(addr, k)
@@ -1178,8 +1491,12 @@ async def update_address(
             db_addr.longitude = res.data["longitude"]
             db_addr.digipin = res.data["digipin"]
             db_addr.verified_bool = True
-        if payload.phone and payload.phone != addr.phone:
-            db_addr.phone_verified = True
+        if lookup_res:
+            db_addr.phone = lookup_res["normalized_number"]
+            db_addr.phone_verified = False
+            db_addr.phone_lookup_validated = True
+            db_addr.lookup_status = "lookup_validated"
+            db_addr.lookup_data = lookup_res
         db_addr.validation_status = validation_status
         db_addr.validation_explanation = validation_explanation
         db_session.commit()

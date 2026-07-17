@@ -92,7 +92,7 @@ class RunRecord(BaseModel):
 
 
 class SignupRequest(BaseModel):
-    role: Literal["buyer", "seller"]
+    role: Literal["buyer", "seller", "delivery_boy"]
     name: str = Field(min_length=1, max_length=120)
     password: str = Field(min_length=8, max_length=128)
     preferred_language: str = Field(default="en", min_length=2, max_length=8)
@@ -118,7 +118,7 @@ class RefreshRequest(BaseModel):
 
 class AuthUser(BaseModel):
     id: str
-    role: Literal["buyer", "seller", "admin"]
+    role: Literal["buyer", "seller", "admin", "delivery_boy"]
     name: str
     email: str | None = None
     phone: str | None = None
@@ -216,7 +216,6 @@ class SellerProductUpdate(BaseModel):
     status: Literal["draft", "pending_seller_input", "active", "blocked", "extracting", "inconsistent"] | None = None
 
 
-
 class SellerVariantCreate(BaseModel):
     size: str = Field(min_length=1, max_length=16)
     stock_qty: int = Field(ge=0)
@@ -285,7 +284,13 @@ class VoiceQueryRequest(BaseModel):
     compare_product_ids: list[str] = Field(default_factory=list, max_length=100)
     text: str | None = None
     audio_key: str | None = None
+    synthesize_audio: bool = False
+    voice_flow: Literal["auto", "size", "general"] = "auto"
     language: str = "hi"
+    page_route: str | None = None
+    page_type: str | None = None
+    order_id: str | None = None
+    return_id: str | None = None
     idempotency_key: str | None = None
 
     @model_validator(mode="after")
@@ -348,8 +353,8 @@ class ReviewCreateRequest(BaseModel):
     product_id: str
     order_id: str
     rating: int = Field(ge=1, le=5)
-    text: str = Field(default="", max_length=2000)
-    image_key: str | None = None
+    text: str = Field(min_length=10, max_length=2000)
+    image_key: str = Field(min_length=1, max_length=255)
 
 
 class ReturnCreateRequest(BaseModel):
@@ -357,6 +362,12 @@ class ReturnCreateRequest(BaseModel):
     product_id: str
     reason: str = Field(min_length=3, max_length=255)
     return_type: Literal["refund", "exchange"] = "refund"
+
+
+class ReturnImageAttemptRequest(BaseModel):
+    front_image_key: str = Field(min_length=1, max_length=255)
+    back_image_key: str = Field(min_length=1, max_length=255)
+    idempotency_key: str = Field(min_length=8, max_length=128)
 
 
 class PresignRequest(BaseModel):
@@ -402,7 +413,7 @@ class AddressCreateRequest(BaseModel):
     longitude: float
     address_type: str = "Home"
     is_default: bool = False
-    verification_session_id: str
+    verification_session_id: str | None = None
 
 
 class AddressUpdateRequest(BaseModel):
@@ -452,3 +463,30 @@ class FitFeedbackRequest(BaseModel):
 class ConfirmationRequest(BaseModel):
     decision: Literal["confirmed", "reschedule", "cancel"]
     scheduled_date: str | None = None
+
+
+class ChatConversationCreate(BaseModel):
+    page_route: str | None = None
+    page_type: str | None = None
+    product_id: str | None = None
+    order_id: str | None = None
+    return_id: str | None = None
+
+
+class ChatMessageSend(BaseModel):
+    conversation_id: str
+    text: str = ""
+    audio_key: str | None = None
+    language: str = "hi"
+    page_route: str | None = None
+    page_type: str | None = None
+    product_id: str | None = None
+    order_id: str | None = None
+    return_id: str | None = None
+    idempotency_key: str | None = Field(default=None, max_length=128)
+
+    @model_validator(mode="after")
+    def require_text_or_audio(self) -> ChatMessageSend:
+        if not self.text.strip() and not self.audio_key:
+            raise ValueError("Either text or audio_key is required")
+        return self
