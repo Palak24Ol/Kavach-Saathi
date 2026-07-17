@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { CheckCircle2, FileImage, LoaderCircle, LogOut, MapPin, RotateCcw, ShieldCheck, Truck, Upload } from "lucide-react";
 
@@ -13,6 +13,8 @@ const TABS = [
   ["completed-returns", "Completed returns"],
 ];
 
+const subscribeToHydration = () => () => {};
+
 async function uploadImage(file, kind) {
   const slot = await post("/uploads/presign", { filename: file.name, content_type: file.type, kind });
   const response = await fetch(slot.upload_url, { method: "PUT", headers: { "Content-Type": file.type }, body: file });
@@ -22,7 +24,9 @@ async function uploadImage(file, kind) {
 
 export default function DeliveryPortal() {
   const router = useRouter();
-  const [auth] = useState(() => loadAuthSession());
+  const hydrated = useSyncExternalStore(subscribeToHydration, () => true, () => false);
+  const auth = hydrated ? loadAuthSession() : null;
+  const authRole = auth?.user?.role;
   const [activeTab, setActiveTab] = useState("pending-deliveries");
   const [deliveries, setDeliveries] = useState([]);
   const [returns, setReturns] = useState([]);
@@ -51,12 +55,13 @@ export default function DeliveryPortal() {
   }
 
   useEffect(() => {
-    if (!auth || auth.user.role !== "delivery_boy") {
+    if (!hydrated) return;
+    if (authRole !== "delivery_boy") {
       router.replace("/");
       return;
     }
     Promise.resolve().then(refresh);
-  }, [auth, router]);
+  }, [authRole, hydrated, router]);
 
   const rows = activeTab === "pending-deliveries" ? deliveries.filter((row) => row.queue_state === "pending")
     : activeTab === "completed-deliveries" ? deliveries.filter((row) => row.queue_state === "completed")
@@ -105,7 +110,7 @@ export default function DeliveryPortal() {
     } catch (reason) { setError(reason.message); } finally { setBusy(false); }
   }
 
-  if (!auth || auth.user.role !== "delivery_boy") return <main className="delivery-loading"><LoaderCircle className="spin" /> Checking access…</main>;
+  if (!hydrated || !auth || authRole !== "delivery_boy") return <main className="delivery-loading"><LoaderCircle className="spin" /> Checking access…</main>;
 
   return (
     <main className="delivery-portal">

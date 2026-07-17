@@ -505,19 +505,17 @@ async def send_return_otp(
     if ret.similarity_aggregate is None or ret.similarity_aggregate < 60:
         raise HTTPException(status_code=400, detail="Cannot send return OTP before successful visual verification.")
 
-    addr = (
-        db.execute(select(Address).join(Order, Address.id == Order.address_id).where(Order.id == ret.order_id))
-        .scalars()
-        .first()
-    )
-
-    if not addr or not addr.phone:
+    order = db.get(Order, ret.order_id)
+    addr = db.get(Address, order.address_id) if order and order.address_id else None
+    phone = (order.address_snapshot or {}).get("phone") if order else None
+    phone = phone or (addr.phone if addr else None)
+    if not phone:
         raise HTTPException(status_code=400, detail="Buyer phone number not found")
 
     twilio_integration = TwilioIntegrationClient(cfg)
     try:
         twilio_integration.send_programmable_whatsapp_otp(
-            addr.phone,
+            phone,
             purpose="return",
             reference_id=ret.id,
         )

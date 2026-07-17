@@ -368,7 +368,7 @@ class ReturnImageAttemptRequest(BaseModel):
 
 
 class PresignRequest(BaseModel):
-    kind: Literal["product", "catalogue", "review", "voice", "return"]
+    kind: Literal["product", "catalogue", "review", "voice", "return", "delivery"]
     filename: str
     content_type: str
 
