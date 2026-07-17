@@ -28,6 +28,7 @@ export default function DeliveryPortal() {
   const [returns, setReturns] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [workflow, setWorkflow] = useState(null);
   const [frontImage, setFrontImage] = useState(null);
   const [backImage, setBackImage] = useState(null);
@@ -63,12 +64,13 @@ export default function DeliveryPortal() {
         : returns.filter((row) => row.queue_state === "completed");
 
   async function beginOtp() {
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setNotice("");
     try {
       const path = workflow.type === "delivery"
         ? `/delivery/deliveries/${workflow.order_id}/otp/send`
         : `/delivery/returns/${workflow.return_id}/otp/send`;
-      await post(path, { idempotency_key: crypto.randomUUID() });
+      const result = await post(path, { idempotency_key: crypto.randomUUID() });
+      setNotice(`${result.message} Ask the buyer for the six-digit code, then enter it below.`);
     } catch (reason) { setError(reason.message); } finally { setBusy(false); }
   }
 
@@ -110,6 +112,7 @@ export default function DeliveryPortal() {
       <header className="delivery-header"><div><Truck /><span><strong>Kavach Saathi Delivery</strong><small>Shared operational queue · signed in as {auth.user.name}</small></span></div><button type="button" onClick={() => { localStorage.removeItem("kavach.auth.v1"); router.push("/"); }}><LogOut size={16} /> Logout</button></header>
       <nav className="delivery-tabs" aria-label="Delivery queue sections">{TABS.map(([id, label]) => <button type="button" className={activeTab === id ? "active" : ""} onClick={() => setActiveTab(id)} key={id}>{label}</button>)}</nav>
       {error && <p className="delivery-error">{error}</p>}
+      {notice && <p className="delivery-notice" role="status">{notice}</p>}
       {loading ? <div className="delivery-loading"><LoaderCircle className="spin" /> Loading queue…</div> : (
         <section className="delivery-grid">
           {!rows.length && <div className="delivery-empty"><CheckCircle2 /><p>No records in this queue.</p></div>}
@@ -128,7 +131,7 @@ export default function DeliveryPortal() {
 
       {workflow && <div className="delivery-modal-layer"><section className="delivery-modal" role="dialog" aria-modal="true"><header><div><ShieldCheck /><strong>{workflow.type === "delivery" ? "Delivery verification" : "Return inspection"}</strong></div><button type="button" onClick={() => setWorkflow(null)}>×</button></header>
         {workflow.type === "delivery" ? <><p>Upload clear front and back images for every returnable item before requesting the buyer’s WhatsApp OTP.</p><label><FileImage /> Front image<input type="file" accept="image/*" capture="environment" onChange={(event) => setFrontImage(event.target.files?.[0] || null)} /></label><label><FileImage /> Back image<input type="file" accept="image/*" capture="environment" onChange={(event) => setBackImage(event.target.files?.[0] || null)} /></label></> : <><p>Compare the delivery evidence and buyer-submitted front/back images before approving pickup.</p>{[["matches_images", "Product matches both evidence sets"], ["seal_and_tags_present", "Required seal and price tags are present"], ["undamaged", "Product is undamaged"]].map(([name, label]) => <label className="inspection-check" key={name}><input type="checkbox" checked={checks[name]} onChange={(event) => setChecks((current) => ({ ...current, [name]: event.target.checked }))} /> {label}</label>)}</>}
-        <button type="button" className="secondary-cta" onClick={beginOtp} disabled={busy}><Upload size={15} /> Send WhatsApp OTP</button><input value={otp} onChange={(event) => setOtp(event.target.value)} inputMode="numeric" placeholder="Buyer-provided OTP" aria-label="Buyer OTP" />
+        <button type="button" className="secondary-cta" onClick={beginOtp} disabled={busy || (workflow.type === "delivery" ? !frontImage || !backImage : !Object.values(checks).every(Boolean))}><Upload size={15} /> Send WhatsApp OTP</button><input value={otp} onChange={(event) => setOtp(event.target.value)} inputMode="numeric" placeholder="Buyer-provided OTP" aria-label="Buyer OTP" />
         <button type="button" className="primary-cta" onClick={workflow.type === "delivery" ? completeDelivery : completeReturn} disabled={busy || !otp || (workflow.type === "delivery" ? !frontImage || !backImage : !Object.values(checks).every(Boolean))}>{busy ? <LoaderCircle className="spin" /> : <ShieldCheck />} {workflow.type === "delivery" ? "Complete delivery" : "Approve return"}</button>
       </section></div>}
     </main>

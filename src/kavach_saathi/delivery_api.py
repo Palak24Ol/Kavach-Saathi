@@ -234,16 +234,12 @@ async def send_delivery_otp(
 
     twilio_integration = TwilioIntegrationClient(cfg)
     try:
-        sid = twilio_integration.start_whatsapp_verification(addr.phone)
+        twilio_integration.send_programmable_whatsapp_otp(
+            addr.phone,
+            purpose="delivery",
+            reference_id=order.id,
+        )
         order.delivery_boy_id = user.id
-        try:
-            get_redis().setex(
-                f"otp:delivery:{order.id}",
-                cfg.otp_expiry_seconds,
-                sid,
-            )
-        except Exception:
-            pass
         db.commit()
         return {"message": "OTP sent via WhatsApp successfully"}
     except Exception as exc:
@@ -312,7 +308,12 @@ async def complete_delivery(
         raise HTTPException(status_code=400, detail="Front and back evidence is required for every order item")
     address = db.get(Address, order.address_id)
     phone = (order.address_snapshot or {}).get("phone") or (address.phone if address else None)
-    if not phone or not TwilioIntegrationClient(cfg).check_whatsapp_verification(phone, payload.otp_code):
+    if not phone or not TwilioIntegrationClient(cfg).check_programmable_whatsapp_otp(
+        phone,
+        payload.otp_code,
+        purpose="delivery",
+        reference_id=order.id,
+    ):
         raise HTTPException(status_code=400, detail="Buyer WhatsApp OTP was not verified")
     verified_at = datetime.now(UTC).isoformat()
     for item in items:
@@ -366,7 +367,14 @@ async def list_assigned_returns(
         .join(User, ReturnRecord.buyer_id == User.id)
         .where(
             ReturnRecord.status.in_(
-                ["pickup_assigned", "pending_return", "return_completed", "returned", "return_approved"]
+                [
+                    "pickup_assigned",
+                    "pickup_scheduled",
+                    "pending_return",
+                    "return_completed",
+                    "returned",
+                    "return_approved",
+                ]
             )
         )
         .order_by(ReturnRecord.created_at.desc())
@@ -491,7 +499,7 @@ async def send_return_otp(
     db: Session = Depends(get_session),
 ):
     ret = db.get(ReturnRecord, return_id)
-    if not ret or ret.status not in {"pickup_assigned", "pending_return"}:
+    if not ret or ret.status not in {"pickup_assigned", "pickup_scheduled", "pending_return"}:
         raise HTTPException(status_code=404, detail="Pending return not found")
 
     if ret.similarity_aggregate is None or ret.similarity_aggregate < 60:
@@ -508,12 +516,12 @@ async def send_return_otp(
 
     twilio_integration = TwilioIntegrationClient(cfg)
     try:
-        sid = twilio_integration.start_whatsapp_verification(addr.phone)
+        twilio_integration.send_programmable_whatsapp_otp(
+            addr.phone,
+            purpose="return",
+            reference_id=ret.id,
+        )
         ret.delivery_boy_id = user.id
-        try:
-            get_redis().setex(f"otp:return:{ret.id}", cfg.otp_expiry_seconds, sid)
-        except Exception:
-            pass
         db.commit()
         return {"message": "OTP sent via WhatsApp successfully"}
     except Exception as exc:
@@ -529,7 +537,7 @@ async def complete_return_inspection(
     db: Session = Depends(get_session),
 ):
     ret = db.get(ReturnRecord, return_id)
-    if not ret or ret.status not in {"pickup_assigned", "pending_return"}:
+    if not ret or ret.status not in {"pickup_assigned", "pickup_scheduled", "pending_return"}:
         raise HTTPException(status_code=404, detail="Pending return not found")
     required_checks = {"matches_images", "seal_and_tags_present", "undamaged"}
     if set(payload.inspection_checklist) != required_checks or not all(payload.inspection_checklist.values()):
@@ -550,7 +558,12 @@ async def complete_return_inspection(
     address = db.get(Address, order.address_id) if order else None
     phone = (order.address_snapshot or {}).get("phone") if order else None
     phone = phone or (address.phone if address else None)
-    if not phone or not TwilioIntegrationClient(cfg).check_whatsapp_verification(phone, payload.otp_code):
+    if not phone or not TwilioIntegrationClient(cfg).check_programmable_whatsapp_otp(
+        phone,
+        payload.otp_code,
+        purpose="return",
+        reference_id=ret.id,
+    ):
         raise HTTPException(status_code=400, detail="Buyer WhatsApp OTP was not verified")
 
     ret.inspection_checklist = {

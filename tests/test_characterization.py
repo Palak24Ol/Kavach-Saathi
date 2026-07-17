@@ -49,6 +49,48 @@ def test_twilio_lookup_v2_success_does_not_require_a_sid():
     assert result["provider_ref"] == lookup.url
 
 
+def test_programmable_whatsapp_otp_uses_sandbox_and_redis():
+    from kavach_saathi.config import get_settings
+    from kavach_saathi.providers.twilio_integration import TwilioIntegrationClient
+
+    stored = {}
+    redis = MagicMock()
+    redis.setex.side_effect = lambda key, _ttl, value: stored.__setitem__(key, value)
+    redis.get.side_effect = lambda key: stored.get(key)
+    redis.ttl.return_value = 300
+    redis.delete.side_effect = lambda key: stored.pop(key, None)
+    twilio = MagicMock()
+    twilio.messages.create.return_value = SimpleNamespace(sid="SM-OTP-TEST")
+    integration = TwilioIntegrationClient(get_settings())
+
+    with (
+        patch.object(integration, "_client", return_value=twilio),
+        patch("kavach_saathi.redis_client.get_redis", return_value=redis),
+        patch("kavach_saathi.providers.twilio_integration.secrets.randbelow", return_value=23456),
+    ):
+        sid = integration.send_programmable_whatsapp_otp(
+            "+919748572321",
+            purpose="delivery",
+            reference_id="O-OTP-TEST",
+        )
+        assert sid == "SM-OTP-TEST"
+        assert not integration.check_programmable_whatsapp_otp(
+            "+919748572321",
+            "000000",
+            purpose="delivery",
+            reference_id="O-OTP-TEST",
+        )
+        assert integration.check_programmable_whatsapp_otp(
+            "+919748572321",
+            "123456",
+            purpose="delivery",
+            reference_id="O-OTP-TEST",
+        )
+
+    twilio.messages.create.assert_called_once()
+    assert "otp:delivery:O-OTP-TEST" not in stored
+
+
 def cleanup_entities(session):
     session.rollback()
     session.query(OrderItem).filter(OrderItem.order_id.like("O-CHAR-%")).delete()
