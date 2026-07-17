@@ -245,7 +245,12 @@ class SizeTranslatorAgent(Agent):
                     Evidence(key="rag_context", value=retrieved, source=provider),
                 ],
                 actions=actions,
-                data={"recommended_size": recommended, "history": history_evidence, "rag_error": rag_error, "source": source},
+                data={
+                    "recommended_size": recommended,
+                    "history": history_evidence,
+                    "rag_error": rag_error,
+                    "source": source,
+                },
                 user_message=user_message,
             )
         else:
@@ -256,13 +261,15 @@ class SizeTranslatorAgent(Agent):
                 confidence = 70
                 summary = f"{recommended} is the most commonly purchased size for this product based on popularity."
                 user_message = {
-                    "en": f"This is the most commonly purchased size ({recommended}) for this product, not a personalized fit guarantee.",
+                    "en": f"This is the most commonly purchased size ({recommended}) for this product, not a personalized fit guarantee.",  # noqa: E501
                     "hi": f"यह इस उत्पाद के लिए सबसे अधिक खरीदा गया साइज़ ({recommended}) है, न कि व्यक्तिगत फिट की गारंटी।",
                     "bn": f"এটি এই পণ্যের लिए সর্বাধিক কেনা আকার ({recommended}), কোনো ব্যক্তিগত ফিটের গ্যারান্টি নয়।",
                     "mr": f"हा या उत्पादनासाठी सर्वात जास्त खरेदी केलेला आकार ({recommended}) आहे, वैयक्तिक फिटची हमी नाही.",
                     "gu": f"આ પ્રોડક્ટ માટે સૌથી વધુ ખરીદાયેલ સાઈઝ ({recommended}) છે, કોઈ વ્યક્તિગત ફિટની ગેરંટી નથી."
                 }
-                actions = [AgentAction(type="select_size", label=f"Select {recommended}", payload={"size": recommended})]
+                actions = [
+                    AgentAction(type="select_size", label=f"Select {recommended}", payload={"size": recommended})
+                ]
                 result = AgentResult(
                     agent=AgentName.SIZE_TRANSLATOR,
                     status=RunStatus.COMPLETED,
@@ -271,10 +278,18 @@ class SizeTranslatorAgent(Agent):
                     evidence=[
                         Evidence(key="buyer_measurements_cm", value=body, source="buyer_profile"),
                         Evidence(key="seller_size_chart", value=chart, source="verified_listing"),
-                        Evidence(key="qualifying_purchases", value=popularity["qualifying_purchases"], source="product_popularity"),
+                        Evidence(
+                            key="qualifying_purchases",
+                            value=popularity["qualifying_purchases"],
+                            source="product_popularity",
+                        ),
                     ],
                     actions=actions,
-                    data={"recommended_size": recommended, "source": "product_popularity", "qualifying_purchases": popularity["qualifying_purchases"]},
+                    data={
+                        "recommended_size": recommended,
+                        "source": "product_popularity",
+                        "qualifying_purchases": popularity["qualifying_purchases"],
+                    },
                     user_message=user_message,
                 )
             else:
@@ -282,11 +297,11 @@ class SizeTranslatorAgent(Agent):
                 confidence = 30
                 summary = "There is not enough purchase history for this product yet."
                 user_message = {
-                    "hi": "There is currently not enough purchase history for this product. Please tell Vishwas Saathi your typical size, body type, or chest and waist measurements.",
-                    "en": "There is currently not enough purchase history for this product. Please tell Vishwas Saathi your typical size, body type, or chest and waist measurements.",
-                    "bn": "এই পণ্যের জন্য এখনও পর্যাপ্ত ক্রয়ের ইতিহাস নেই। সঠিক আকার জানতে আপনার সাধারণ আকার, শরীরের ধরন বা বুক/কোমরের পরিমাপ বলুন।",
-                    "mr": "या उत्पादनासाठी अद्याप पुरेसा खरेदी इतिहास उपलब्ध नाही. अचूक आकारासाठी विश्वास संवादमध्ये आपला सामान्य आकार, शरीराचा प्रकार किंवा छाती/कमरेचे मोजमाप सांगा.",
-                    "gu": "આ ઉત્પાદન માટે હજી પૂરતો ખરીદીનો ઇતિહાસ ઉપલબ્ધ નથી. સાચી સાઈઝ જાણવા માટે વિશ્વાસ સંવાદમાં તમારી સામાન્ય સાઈઝ, શરીરનો પ્રકાર અથવા છાતી/કમરના માપ જણાવો."
+                    "hi": "There is currently not enough purchase history for this product. Please tell Vishwas Saathi your typical size, body type, or chest and waist measurements.",  # noqa: E501
+                    "en": "There is currently not enough purchase history for this product. Please tell Vishwas Saathi your typical size, body type, or chest and waist measurements.",  # noqa: E501
+                    "bn": "এই পণ্যের জন্য এখনও পর্যাপ্ত ক্রয়ের ইতিহাস নেই। সঠিক আকার জানতে আপনার সাধারণ আকার, শরীরের ধরন বা বুক/কোমরের পরিমাপ বলুন।",  # noqa: E501
+                    "mr": "या उत्पादनासाठी अद्याप पुरेसा खरेदी इतिहास उपलब्ध नाही. अचूक आकारासाठी विश्वास संवादमध्ये आपला सामान्य आकार, शरीराचा प्रकार किंवा छाती/कमरेचे मोजमाप सांगा.",  # noqa: E501
+                    "gu": "આ ઉત્પાદન માટે હજી પૂરતો ખરીદીનો ઇતિહાસ ઉપલબ્ધ નથી. સાચી સાઈઝ જાણવા માટે વિશ્વાસ સંવાદમાં તમારી સામાન્ય સાઈઝ, શરીરનો પ્રકાર અથવા છાતી/કમરના માપ જણાવો."  # noqa: E501
                 }
                 actions = [
                     AgentAction(

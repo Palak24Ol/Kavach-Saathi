@@ -103,7 +103,12 @@ class GoogleMapsGeocoder:
         }
         return {
             "label": result.get("formatted_address", ""),
-            "locality": components.get("sublocality") or components.get("sublocality_level_1") or components.get("neighborhood") or "",
+            "locality": (
+                components.get("sublocality")
+                or components.get("sublocality_level_1")
+                or components.get("neighborhood")
+                or ""
+            ),
             "city": components.get("locality") or components.get("administrative_area_level_2", ""),
             "district": components.get("administrative_area_level_2", ""),
             "state": components.get("administrative_area_level_1", ""),
@@ -133,7 +138,12 @@ class GoogleMapsGeocoder:
         }
         return {
             "label": result.get("formatted_address", ""),
-            "locality": components.get("sublocality") or components.get("sublocality_level_1") or components.get("neighborhood") or "",
+            "locality": (
+                components.get("sublocality")
+                or components.get("sublocality_level_1")
+                or components.get("neighborhood")
+                or ""
+            ),
             "city": components.get("locality") or components.get("administrative_area_level_2", ""),
             "district": components.get("administrative_area_level_2", ""),
             "state": components.get("administrative_area_level_1", ""),

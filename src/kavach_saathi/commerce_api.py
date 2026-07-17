@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from kavach_saathi.auth import require_role
 from kavach_saathi.config import Settings, get_settings
-from kavach_saathi.container import get_container
+from kavach_saathi.container import Container, get_container
 from kavach_saathi.db.base import get_session
 from kavach_saathi.db.models import (
     Address,
@@ -86,18 +86,6 @@ def validate_phone_with_lookup(phone: str, country: str | None, cfg: Settings) -
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    is_valid = (
-        lookup_res.get("valid") is True
-        and lookup_res.get("country_code", "").upper() == country_code.upper()
-        and lookup_res.get("line_type")
-        in (
-            "mobile",
-            "voip",
-            "personal",
-            "fixed_line_or_mobile",
-            "fixed-line-or-mobile",
-        )
-    )
     if lookup_res.get("valid") is not True:
         raise HTTPException(
             status_code=400,
@@ -107,12 +95,13 @@ def validate_phone_with_lookup(phone: str, country: str | None, cfg: Settings) -
             }
         )
     if lookup_res.get("country_code", "").upper() != country_code.upper():
+        mismatch_message = (
+            f"Phone number country code mismatch: expected {country_code}, "
+            f"got {lookup_res.get('country_code') or 'unknown'}."
+        )
         raise HTTPException(
             status_code=400,
-            detail={
-                "message": f"Phone number country code mismatch: expected {country_code}, got {lookup_res.get('country_code') or 'unknown'}.",
-                "errors": {"phone": f"Phone number country code mismatch: expected {country_code}, got {lookup_res.get('country_code') or 'unknown'}."}
-            }
+            detail={"message": mismatch_message, "errors": {"phone": mismatch_message}},
         )
     valid_line_types = (
         "mobile",
@@ -985,7 +974,10 @@ async def submit_return_image_attempt(
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail={"message": "Image verification is temporarily unavailable. Please retry; this attempt was not counted.", "code": "provider_unavailable"},
+            detail={
+                "message": "Image verification is temporarily unavailable. Please retry; this attempt was not counted.",
+                "code": "provider_unavailable",
+            },
         ) from exc
 
     front_score = front_res.visual_similarity_score
@@ -1117,14 +1109,14 @@ async def create_review(
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"Failed to load catalogue primary image: {exc}"
-        )
+        ) from exc
 
     try:
         review_image_bytes = await read_image_bytes(payload.image_key, container.settings)
     except Exception as exc:
         raise HTTPException(
             status_code=400, detail=f"Failed to load uploaded review image: {exc}"
-        )
+        ) from exc
 
     provider = ReviewVerificationProvider(container.settings)
     try:
@@ -1138,7 +1130,10 @@ async def create_review(
     except Exception as exc:
         raise HTTPException(
             status_code=503,
-            detail={"message": "Review verification is temporarily unavailable. Please retry later.", "code": "provider_unavailable"},
+            detail={
+                "message": "Review verification is temporarily unavailable. Please retry later.",
+                "code": "provider_unavailable",
+            },
         ) from exc
 
     if not res.overall_passed:
@@ -1149,7 +1144,10 @@ async def create_review(
             errors["text"] = "Please replace unrelated, random, or incomplete text with your actual product experience."
         if not res.image_text_match_passed:
             errors["text"] = "Your text describes a different item than the uploaded image."
-        raise HTTPException(status_code=422, detail={"message": "Please correct the highlighted review fields.", "errors": errors})
+        raise HTTPException(
+            status_code=422,
+            detail={"message": "Please correct the highlighted review fields.", "errors": errors},
+        )
 
     review_id = f"RV-{uuid4().hex[:10].upper()}"
     review = Review(

@@ -70,8 +70,9 @@ async def resolve_return(
     scoring instead of sitting inert."""
     import uuid
     from datetime import timedelta
+
+    from kavach_saathi.db.models import OrderItem, OrderStatusHistory
     from kavach_saathi.order_status import OrderStatus
-    from kavach_saathi.db.models import OrderStatusHistory, OrderItem
 
     record = session.get(ReturnRecord, return_id)
     if not record:

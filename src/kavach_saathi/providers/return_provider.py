@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import json
-from pydantic import BaseModel, Field
 from typing import Literal
+
+from pydantic import BaseModel, Field
 
 from kavach_saathi.config import Settings
 from kavach_saathi.providers.reasoning import (
@@ -10,6 +10,7 @@ from kavach_saathi.providers.reasoning import (
     GroqReasoningProvider,
     ReasoningUnavailable,
 )
+
 
 class ReturnComparisonSchema(BaseModel):
     visual_similarity_score: int = Field(ge=0, le=100)
@@ -27,16 +28,24 @@ class ReturnComparisonResult(BaseModel):
 
 
 SYSTEM_PROMPT = """You are Kavach Saathi's Return Authenticity Verifier.
-Your job is to compare a reviewer/buyer's photo of a returned item against the delivery agent's photo of the delivered item.
+Your job is to compare a reviewer/buyer's photo of a returned item against the
+delivery agent's photo of the delivered item.
 You are given two images:
 1. Image 1 (Delivered): The official photo captured when the item was delivered.
 2. Image 2 (Returned): The buyer's uploaded photo of the return item.
 
 Analyze:
-1. Compare Image 1 and Image 2 carefully. They should show the same side (either both front or both back) of the same garment.
-2. visual_similarity_score: Score the similarity of the two garments from 0 to 100. If they look completely identical (same fabric, pattern, color, shape), confidence is high. If there are visible mismatches (different colors, different patterns, logos, button arrangements, collar shape), confidence is low.
-3. mismatch_detected: Set to True if there is a clear mismatch (e.g., visual_similarity_score < 60), False otherwise.
-4. visible_differences: List specific differences observed between the two images (e.g. "Image 1 shows a red collar, Image 2 shows black", "Pattern alignment is completely different").
+1. Compare Image 1 and Image 2 carefully. They should show the same side (either
+   both front or both back) of the same garment.
+2. visual_similarity_score: Score the similarity of the two garments from 0 to 100.
+   If they look completely identical (same fabric, pattern, color, shape),
+   confidence is high. If there are visible mismatches (different colors,
+   different patterns, logos, button arrangements, collar shape), confidence is low.
+3. mismatch_detected: Set to True if there is a clear mismatch (e.g.,
+   visual_similarity_score < 60), False otherwise.
+4. visible_differences: List specific differences observed between the two images
+   (e.g. "Image 1 shows a red collar, Image 2 shows black", "Pattern alignment is
+   completely different").
 """
 
 

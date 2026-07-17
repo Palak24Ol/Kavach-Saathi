@@ -28,7 +28,12 @@ class OrderStatus(StrEnum):
 
 ALLOWED_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.CART: {OrderStatus.PLACED, OrderStatus.CANCELLED},
-    OrderStatus.PLACED: {OrderStatus.AWAITING_BUYER_CONFIRMATION, OrderStatus.CONFIRMED, OrderStatus.CANCELLED, OrderStatus.RTO},
+    OrderStatus.PLACED: {
+        OrderStatus.AWAITING_BUYER_CONFIRMATION,
+        OrderStatus.CONFIRMED,
+        OrderStatus.CANCELLED,
+        OrderStatus.RTO,
+    },
     OrderStatus.AWAITING_BUYER_CONFIRMATION: {OrderStatus.CONFIRMED, OrderStatus.CANCELLED},
     OrderStatus.CONFIRMED: {OrderStatus.DELIVERY_SCHEDULED, OrderStatus.PACKED, OrderStatus.CANCELLED},
     OrderStatus.DELIVERY_SCHEDULED: {OrderStatus.PACKED, OrderStatus.CANCELLED},

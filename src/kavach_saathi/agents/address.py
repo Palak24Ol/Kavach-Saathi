@@ -7,10 +7,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from kavach_saathi.agents.base import Agent
 from kavach_saathi.agent_logging import log_agent_call
-from kavach_saathi.db.base import SessionLocal
+from kavach_saathi.agents.base import Agent
 from kavach_saathi.config import get_settings
+from kavach_saathi.db.base import SessionLocal
 from kavach_saathi.digipin import encode
 from kavach_saathi.models import (
     AddressVerifyRequest,

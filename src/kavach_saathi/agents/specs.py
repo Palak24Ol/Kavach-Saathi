@@ -139,7 +139,9 @@ class SpecEnforcerAgent(Agent):
                     confidence=confidence,
                     latency_ms=latency_ms,
                     input_ref=",".join(request.image_keys),
-                    provider=f"{self.reasoner.name}+clip" if not ocr_error else f"clip ({self.reasoner.name} unavailable)",
+                    provider=(
+                        f"{self.reasoner.name}+clip" if not ocr_error else f"clip ({self.reasoner.name} unavailable)"
+                    ),
                     output_json=result.data,
                 )
                 session.commit()
