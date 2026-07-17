@@ -41,7 +41,7 @@ def test_routes_to_stable_diffusion_when_gemini_not_configured():
     ):
         import asyncio
 
-        results = asyncio.get_event_loop().run_until_complete(
+        results = asyncio.run(
             generator.generate(["some/key.png"], {"id": "P-TEST"})
         )
 
@@ -67,7 +67,7 @@ def test_uses_nano_banana_when_configured_and_within_quota():
     ):
         import asyncio
 
-        results = asyncio.get_event_loop().run_until_complete(
+        results = asyncio.run(
             generator.generate(["some/key.png"], {"id": "P-TEST"})
         )
 
@@ -92,7 +92,7 @@ def test_falls_back_to_stable_diffusion_when_quota_exceeded():
     ):
         import asyncio
 
-        results = asyncio.get_event_loop().run_until_complete(
+        results = asyncio.run(
             generator.generate(["some/key.png"], {"id": "P-TEST"})
         )
 
@@ -121,7 +121,7 @@ def test_falls_back_to_stable_diffusion_when_nano_banana_errors():
     ):
         import asyncio
 
-        results = asyncio.get_event_loop().run_until_complete(
+        results = asyncio.run(
             generator.generate(["some/key.png"], {"id": "P-TEST"})
         )
 

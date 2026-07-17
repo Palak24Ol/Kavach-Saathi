@@ -31,7 +31,9 @@ def test_falls_back_to_deterministic_when_pinecone_not_configured(client) -> Non
             .where(AgentLog.agent_name == "size_translator", AgentLog.entity_id == "P-001")
             .order_by(AgentLog.id.desc())
         ).scalars().first()
-        assert log.provider == "deterministic_ease_margin_fallback"
+        # log_agent_call always records the static chain label here, distinct from the
+        # per-branch "deterministic_ease_margin_fallback" evidence source asserted above.
+        assert log.provider == "size_translator_fallback_chain"
 
 
 def test_uses_rag_recommendation_when_pinecone_and_reasoner_available() -> None:
@@ -65,7 +67,7 @@ def test_uses_rag_recommendation_when_pinecone_and_reasoner_available() -> None:
         ):
             return await agent.run(SizeRecommendRequest(buyer_id="B-001", product_id="P-001"))
 
-    result = asyncio.get_event_loop().run_until_complete(run_it())
+    result = asyncio.run(run_it())
     assert result.data["recommended_size"] == "L"
     assert result.data["rag_error"] is None
     assert result.confidence == 88
@@ -107,7 +109,7 @@ def test_out_of_chart_recommendation_falls_back_honestly() -> None:
         ):
             return await agent.run(SizeRecommendRequest(buyer_id="B-001", product_id="P-001"))
 
-    result = asyncio.get_event_loop().run_until_complete(run_it())
+    result = asyncio.run(run_it())
     assert result.data["recommended_size"] == "XL"  # deterministic fallback, not "XXXL"
     assert "out-of-chart" in result.data["rag_error"]
 

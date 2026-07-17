@@ -23,7 +23,13 @@ def test_text_query_falls_back_to_deterministic_when_unconfigured(client) -> Non
     labeled as a fallback, and use the demo mock audio placeholder rather than crash."""
     response = client.post(
         "/v1/voice/query",
-        json={"buyer_id": "B-001", "product_id": "P-001", "text": "Iska fabric kya hai?", "language": "hi"},
+        json={
+            "buyer_id": "B-001",
+            "product_id": "P-001",
+            "text": "Iska fabric kya hai?",
+            "language": "hi",
+            "synthesize_audio": True,
+        },
     )
     assert response.status_code == 200
     result = response.json()["results"]["voice_qa"]
@@ -67,7 +73,7 @@ def test_uses_rag_answer_when_pinecone_and_reasoner_available() -> None:
         ):
             return await agent.run(VoiceQueryRequest(buyer_id="B-001", product_id="P-001", text="Fabric kya hai?"))
 
-    result = asyncio.get_event_loop().run_until_complete(run_it())
+    result = asyncio.run(run_it())
     assert result.data["rag_error"] is None
     assert result.confidence == 91
     assert "resolved_qa" in upserted_namespaces
@@ -104,6 +110,6 @@ def test_size_intent_hands_off_without_running_rag() -> None:
                 VoiceQueryRequest(buyer_id="B-001", product_id="P-001", text="size?"), size_result=size_result
             )
 
-    result = asyncio.get_event_loop().run_until_complete(run_it())
+    result = asyncio.run(run_it())
     assert result.user_message["en"] == "We recommend size L"
     assert result.confidence == 88

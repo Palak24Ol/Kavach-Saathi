@@ -16,11 +16,11 @@ def _seeded_products(repository: CommerceRepository) -> list[dict]:
 
 
 def test_seed_dataset_counts() -> None:
-    # >= rather than == for buyers/sellers/products/orders/reviews/addresses: auth, the
-    # seller portal, and real cart/order/review/address-verify endpoints are all real
-    # now (Sub-phases 1-2 and 6), so the test suite (and real users) can add rows beyond
-    # the seeded baseline over time. returns are the only collection still exclusively
-    # seed-script-written (real return creation lands in Sub-phase 9).
+    # >= rather than == for every collection: auth, the seller portal, and real
+    # cart/order/review/address-verify/return-analyze endpoints are all real now, so
+    # the test suite (and real users) can add rows beyond the seeded baseline over
+    # time. Returns are no longer seed-script-exclusive either -- POST
+    # /v1/returns/analyze (Agent 8) writes a real ReturnRecord per real analysis.
     repository = CommerceRepository()
     summary = repository.summary()
     assert summary["products"] >= 500
@@ -29,7 +29,7 @@ def test_seed_dataset_counts() -> None:
     assert summary["orders"] >= 200
     assert summary["reviews"] >= 1000
     assert summary["addresses"] >= 40
-    assert summary["returns"] == 60
+    assert summary["returns"] >= 60
 
 
 def test_catalogue_has_exactly_50_products_in_every_requested_category() -> None:

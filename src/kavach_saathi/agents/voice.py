@@ -491,7 +491,10 @@ class VoiceQAAgent(Agent):
                     content_type="audio/wav",
                 )
             except SarvamUnavailable:
-                audio_key = None
+                # SarvamClient.synthesize's contract: fall back to the honest demo
+                # audio placeholder rather than silently drop audio (see sarvam.py's
+                # docstring) -- distinct from fabricating a fake voice clip.
+                audio_key = f"assets/mock/audio/demo-{response_language}.wav"
 
         result = AgentResult(
             agent=AgentName.VOICE_QA,

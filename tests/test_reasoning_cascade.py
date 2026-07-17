@@ -42,7 +42,7 @@ def test_falls_back_to_second_provider_when_first_fails() -> None:
     backup = _FakeProvider("backup", answer="from backup")
     cascade = CascadingReasoningProvider([primary, backup])
 
-    result = asyncio.get_event_loop().run_until_complete(_run(cascade))
+    result = asyncio.run(_run(cascade))
     assert result.value == "from backup"
     assert primary.calls == 1
     assert backup.calls == 1
@@ -55,7 +55,7 @@ def test_uses_first_provider_when_it_succeeds_without_touching_second() -> None:
     backup = _FakeProvider("backup")
     cascade = CascadingReasoningProvider([primary, backup])
 
-    result = asyncio.get_event_loop().run_until_complete(_run(cascade))
+    result = asyncio.run(_run(cascade))
     assert result.value == "from primary"
     assert primary.calls == 1
     assert backup.calls == 0
@@ -75,7 +75,7 @@ def test_raises_when_all_providers_fail() -> None:
         except ReasoningUnavailable as exc:
             return str(exc)
 
-    error = asyncio.get_event_loop().run_until_complete(run_it())
+    error = asyncio.run(run_it())
     assert error is not None
     assert "backup" in error  # the last attempted provider's error, not the first
 
@@ -98,6 +98,14 @@ def test_groq_routes_image_calls_to_the_vision_model() -> None:
     (gap found via live testing: Gemini 503s left OCR with no working fallback)."""
     import asyncio
 
+    from kavach_saathi import model_registry
+
+    # get_groq_client() caches its client as a module-level singleton (deliberate in
+    # production, to avoid recreating the SDK client per request) -- reset it so this
+    # test's patch("groq.AsyncGroq") is the one actually picked up, not a client
+    # cached by whichever earlier test happened to construct one first.
+    model_registry._groq_client = None  # noqa: SLF001
+
     settings = Settings(
         groq_api_key="test-key",
         groq_model="text-only-model",
@@ -108,7 +116,7 @@ def test_groq_routes_image_calls_to_the_vision_model() -> None:
         mock_client.chat.completions.create = AsyncMock(return_value=_mock_groq_response('{"value": "seen"}'))
         provider = GroqReasoningProvider(settings)
 
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             provider.structured(system="s", prompt="p", schema=_Answer, images=[b"fake-image-bytes"])
         )
 
@@ -123,6 +131,12 @@ def test_groq_routes_image_calls_to_the_vision_model() -> None:
 def test_groq_uses_text_model_when_no_images() -> None:
     import asyncio
 
+    from kavach_saathi import model_registry
+
+    # Same singleton-cache reset as above -- without it this test silently reuses the
+    # previous test's cached mock client instead of the fresh one patched here.
+    model_registry._groq_client = None  # noqa: SLF001
+
     settings = Settings(
         groq_api_key="test-key",
         groq_model="text-only-model",
@@ -133,7 +147,7 @@ def test_groq_uses_text_model_when_no_images() -> None:
         mock_client.chat.completions.create = AsyncMock(return_value=_mock_groq_response('{"value": "seen"}'))
         provider = GroqReasoningProvider(settings)
 
-        asyncio.get_event_loop().run_until_complete(provider.structured(system="s", prompt="p", schema=_Answer))
+        asyncio.run(provider.structured(system="s", prompt="p", schema=_Answer))
 
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         assert call_kwargs["model"] == "text-only-model"

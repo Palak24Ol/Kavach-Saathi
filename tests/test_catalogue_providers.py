@@ -37,7 +37,7 @@ def test_stolen_photo_search_raises_when_unconfigured() -> None:
     assert provider.is_configured is False
 
     with pytest.raises(GoogleVisionUnavailable):
-        asyncio.get_event_loop().run_until_complete(provider.search(b"fake-bytes"))
+        asyncio.run(provider.search(b"fake-bytes"))
 
 
 def test_stolen_photo_search_parses_real_rest_response_shape() -> None:
@@ -65,7 +65,7 @@ def test_stolen_photo_search_parses_real_rest_response_shape() -> None:
         mock_client = mock_client_cls.return_value.__aenter__.return_value
         mock_client.post = AsyncMock(return_value=fake_response)
 
-        result = asyncio.get_event_loop().run_until_complete(provider.search(b"fake-bytes"))
+        result = asyncio.run(provider.search(b"fake-bytes"))
 
     assert result == {
         "full_matches": ["https://example.com/full.jpg"],

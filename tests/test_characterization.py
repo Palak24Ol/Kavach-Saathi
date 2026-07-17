@@ -40,8 +40,10 @@ def test_twilio_lookup_v2_success_does_not_require_a_sid():
     redis.get.return_value = None
 
     integration = TwilioIntegrationClient(get_settings())
-    with patch.object(integration, "_client", return_value=client), patch(
-        "kavach_saathi.redis_client.get_redis", return_value=redis
+    with (
+        patch.object(TwilioIntegrationClient, "is_configured", new_callable=lambda: property(lambda self: True)),
+        patch.object(integration, "_client", return_value=client),
+        patch("kavach_saathi.redis_client.get_redis", return_value=redis),
     ):
         result = integration.lookup_phone("9748572321", "IN")
 
@@ -66,6 +68,8 @@ def test_programmable_whatsapp_otp_uses_sandbox_and_redis():
     integration = TwilioIntegrationClient(get_settings())
 
     with (
+        patch.object(TwilioIntegrationClient, "is_configured", new_callable=lambda: property(lambda self: True)),
+        patch.object(integration.settings, "twilio_whatsapp_from", "whatsapp:+14155238886"),
         patch.object(integration, "_client", return_value=twilio),
         patch("kavach_saathi.redis_client.get_redis", return_value=redis),
         patch("kavach_saathi.providers.twilio_integration.secrets.randbelow", return_value=23456),
@@ -241,7 +245,16 @@ def test_order_and_status_history_characterization():
         session.add(history2)
         session.commit()
 
-        histories = session.query(OrderStatusHistory).filter(OrderStatusHistory.order_id == "O-CHAR-123").all()
+        # order_by(id) makes the sequence deterministic -- without it, Postgres is free
+        # to return rows in whatever physical scan order it likes, which is usually
+        # insertion order on a small fresh table but isn't guaranteed and did flip
+        # under the full suite's much larger, busier table.
+        histories = (
+            session.query(OrderStatusHistory)
+            .filter(OrderStatusHistory.order_id == "O-CHAR-123")
+            .order_by(OrderStatusHistory.id)
+            .all()
+        )
         assert len(histories) == 2
         assert histories[0].status == OrderStatus.PLACED
         assert histories[1].status == OrderStatus.SHIPPED

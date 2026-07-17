@@ -114,6 +114,22 @@ def mock_catalogue_generation():
     with patch(target, new=AsyncMock(return_value=MOCK_CATALOGUE_VIEWS)):
         yield MOCK_CATALOGUE_VIEWS
 
+    # save_generated_images() (repository.py) points product.media_primary at the
+    # generated front view's key once it exists -- correct behavior for a real run,
+    # but MOCK_CATALOGUE_VIEWS above are fake keys never actually written to disk.
+    # Left as-is, media_primary stays pointed at a file that doesn't exist for the
+    # rest of this session-scoped test run (the `client` fixture shares one DB across
+    # the whole pytest session), breaking any later test that reads P-001's primary
+    # image. Every current usage of this fixture targets P-001.
+    from kavach_saathi.db.base import SessionLocal
+    from kavach_saathi.db.models import Product
+
+    with SessionLocal() as session:
+        product = session.get(Product, "P-001")
+        if product is not None:
+            product.media_primary = "assets/mock/products/P-001.png"
+            session.commit()
+
 
 MOCK_CV_RESULT = {
     "clip_fabric": "cotton",

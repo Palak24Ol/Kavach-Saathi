@@ -4,10 +4,15 @@ from conftest import poll_run
 
 
 def test_frontend_is_served(client) -> None:
-    response = client.get("/")
-    assert response.status_code == 200
-    assert "Run all 8 agents" in response.text
-    assert "Ask GPT-OSS" in response.text
+    """The backend used to serve an inline single-page demo directly at "/" (the "Run
+    all 8 agents" / "Ask GPT-OSS" static page); that was replaced by a pure-API
+    backend plus a separate Next.js frontend (web/), with "/" now just redirecting
+    buyers to FRONTEND_ORIGIN instead of rendering anything itself."""
+    from kavach_saathi.config import get_settings
+
+    response = client.get("/", follow_redirects=False)
+    assert response.status_code in (302, 307)
+    assert response.headers["location"] == get_settings().frontend_origin
 
 
 def test_health_reports_all_seed_collections(client) -> None:
@@ -54,11 +59,10 @@ def test_storefront_exposes_all_500_products_in_presentation_order(client) -> No
     ]
 
 
-def test_storefront_demo_context_connects_golden_order(client) -> None:
-    body = client.get("/v1/storefront/demo-context").json()
-    assert body["buyer"]["id"] == "B-001"
-    assert body["order"]["id"] == "O-GOLDEN"
-    assert body["order"]["product_id"] == "P-001"
+# GET /v1/storefront/demo-context was deliberately removed (commit 3651bdc "feat:
+# add buyer and return agents") once real JWT-authenticated buyer sessions replaced
+# the old hardcoded-golden-buyer (B-001) demo shortcuts -- there's no equivalent
+# route left to test in its place.
 
 
 def test_listing_fans_out_to_two_agents(client, mock_catalogue_generation, mock_spec_vision) -> None:
@@ -120,6 +124,7 @@ def test_voice_size_query_routes_through_two_agents(client) -> None:
             "product_id": "P-001",
             "text": "Mujhe kaunsa size lena chahiye?",
             "language": "hi",
+            "synthesize_audio": True,
         },
     )
     body = response.json()
@@ -241,27 +246,17 @@ def test_address_verification_degrades_honestly_without_geocoder(client) -> None
     body = response.json()
     result = body["results"]["address_guardian"]
     assert body["status"] == "needs_evidence"
-    assert result["data"]["address_id"]
+    # address_id is no longer part of this agent's output -- /v1/address/verify is
+    # pure validation now (see _verified_address_id in test_commerce_api.py); the
+    # real persisted Address row comes only from the separate, phone-verified
+    # POST /v1/addresses.
     assert any(evidence["key"] == "geocode_error" and evidence["value"] for evidence in result["evidence"])
 
 
-def test_confirmation_address_update_loops_to_guardian(client) -> None:
-    response = client.post(
-        "/v1/orders/O-GOLDEN/confirm-simulated",
-        json={
-            "decision": "update_address",
-            "updated_address": {
-                "buyer_id": "B-001",
-                "raw_address": "Hanuman Mandir ke peeche",
-                "postal_pin": "495001",
-                "coordinates": {"latitude": 22.0797, "longitude": 82.1409},
-            },
-        },
-    )
-    assert set(response.json()["results"]) == {
-        "delivery_confirmation",
-        "address_guardian",
-    }
+# POST /v1/orders/{id}/confirm-simulated was deliberately removed (commit 3651bdc
+# "feat: add buyer and return agents") once the real WhatsApp-based confirmation flow
+# replaced this checkout-flow demo shortcut -- there's no equivalent route left to
+# test in its place.
 
 
 def test_return_threshold_paths(client) -> None:
@@ -277,12 +272,14 @@ def test_return_threshold_paths(client) -> None:
 
     from kavach_saathi.providers.spec_ocr import ExtractedSpec
 
+    # ReturnAnalyzeRequest now also requires product_id (models.py) -- matching each
+    # order's seeded product (data/seed/orders.json) rather than assuming P-001 for all.
     cases = (
-        ("O-GOLDEN", 0.95, True, "completed", "approve"),
-        ("O-002", 0.55, False, "needs_evidence", "request_more_evidence"),
-        ("O-003", 0.10, False, "manual_review", "manual_inspection"),
+        ("O-GOLDEN", "P-001", 0.95, True, "completed", "approve"),
+        ("O-002", "P-011", 0.55, False, "needs_evidence", "request_more_evidence"),
+        ("O-003", "P-021", 0.10, False, "manual_review", "manual_inspection"),
     )
-    for order_id, clip_score, label_visible, status, decision in cases:
+    for order_id, product_id, clip_score, label_visible, status, decision in cases:
         extracted = ExtractedSpec(fabric=None, label_visible=label_visible)
         with (
             patch(extract_frames_target, return_value=[b"fake-frame-bytes"]),
@@ -291,7 +288,11 @@ def test_return_threshold_paths(client) -> None:
         ):
             response = client.post(
                 "/v1/returns/analyze",
-                json={"order_id": order_id, "video_key": "assets/mock/returns/return-approve.mp4"},
+                json={
+                    "order_id": order_id,
+                    "product_id": product_id,
+                    "video_key": "assets/mock/returns/return-approve.mp4",
+                },
             )
             body = poll_run(client, response.json()["run_id"])
         assert body["status"] == status, f"{order_id}: {body}"
