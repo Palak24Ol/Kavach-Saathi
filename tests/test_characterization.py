@@ -1,5 +1,7 @@
 import pytest
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 from kavach_saathi.db.base import SessionLocal
 from kavach_saathi.db.models import (
     User,
@@ -15,6 +17,36 @@ from kavach_saathi.db.models import (
 from kavach_saathi.auth import signup_user, authenticate_user, verify_password
 from kavach_saathi.digipin import encode
 from kavach_saathi.order_status import OrderStatus
+
+
+def test_twilio_lookup_v2_success_does_not_require_a_sid():
+    from kavach_saathi.config import get_settings
+    from kavach_saathi.providers.twilio_integration import TwilioIntegrationClient
+
+    lookup = SimpleNamespace(
+        valid=True,
+        phone_number="+919748572321",
+        country_code="IN",
+        line_type_intelligence={"carrier_name": "Airtel", "type": "mobile"},
+        url="https://lookups.twilio.com/v2/PhoneNumbers/+919748572321",
+    )
+    phone_numbers = MagicMock()
+    phone_numbers.fetch.return_value = lookup
+    client = MagicMock()
+    client.lookups.v2.phone_numbers.return_value = phone_numbers
+    redis = MagicMock()
+    redis.get.return_value = None
+
+    integration = TwilioIntegrationClient(get_settings())
+    with patch.object(integration, "_client", return_value=client), patch(
+        "kavach_saathi.redis_client.get_redis", return_value=redis
+    ):
+        result = integration.lookup_phone("9748572321", "IN")
+
+    assert result["valid"] is True
+    assert result["normalized_number"] == "+919748572321"
+    assert result["line_type"] == "mobile"
+    assert result["provider_ref"] == lookup.url
 
 
 def cleanup_entities(session):

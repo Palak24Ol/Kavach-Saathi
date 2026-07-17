@@ -69,7 +69,10 @@ class TwilioIntegrationClient:
                 "country_code": lookup.country_code,
                 "carrier_name": carrier,
                 "line_type": line_type,
-                "provider_ref": lookup.sid,
+                # Lookup v2 phone-number responses have a URL but no resource SID.
+                # Reading ``lookup.sid`` raised AttributeError after successful
+                # validation and was previously misreported as an invalid number.
+                "provider_ref": getattr(lookup, "url", None),
                 "error_code": None,
                 "timestamp": datetime.now(UTC).isoformat(),
             }
@@ -80,17 +83,12 @@ class TwilioIntegrationClient:
                 except Exception:
                     pass
             return result
-        except Exception as e:
-            return {
-                "valid": False,
-                "normalized_number": normalized,
-                "country_code": country_code,
-                "carrier_name": None,
-                "line_type": None,
-                "provider_ref": None,
-                "error_code": str(e),
-                "timestamp": datetime.now(UTC).isoformat(),
-            }
+        except Exception as exc:
+            # Lookup v2 represents a genuinely invalid number with a successful
+            # response containing valid=false. Transport, credential, billing, and
+            # programming failures must remain provider errors rather than blaming
+            # the buyer's phone number.
+            raise RuntimeError("Twilio Lookup is temporarily unavailable") from exc
 
     def start_whatsapp_verification(self, phone: str) -> str:
         if not self.is_configured or not self.settings.twilio_verify_service_sid:

@@ -1618,8 +1618,9 @@ function AddressManagerDrawer({ open, onClose, buyerId, fullScreen = false }) {
                 <label htmlFor="address-phone" style={{ fontWeight: 600 }}>Phone Number *</label>
                 <div style={{ display: "flex", gap: "8px" }}>
                   <select value={formData.country} onChange={(e) => setFormData({ ...formData, country: e.target.value })} aria-label="Phone country"><option>India</option><option>United States</option><option>United Kingdom</option></select>
-                  <input id="address-phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="+919876543210" required style={{ flex: 1 }} />
+                  <input id="address-phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="9876543210 or +919876543210" inputMode="tel" autoComplete="tel" required style={{ flex: 1 }} />
                 </div>
+                <small>For India, enter either the 10-digit mobile number or +91 followed by the number.</small>
                 {fieldErrors.phone && <small className="field-error">{fieldErrors.phone}</small>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
