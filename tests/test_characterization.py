@@ -1,5 +1,7 @@
 import pytest
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 from kavach_saathi.db.base import SessionLocal
 from kavach_saathi.db.models import (
     User,
@@ -15,6 +17,78 @@ from kavach_saathi.db.models import (
 from kavach_saathi.auth import signup_user, authenticate_user, verify_password
 from kavach_saathi.digipin import encode
 from kavach_saathi.order_status import OrderStatus
+
+
+def test_twilio_lookup_v2_success_does_not_require_a_sid():
+    from kavach_saathi.config import get_settings
+    from kavach_saathi.providers.twilio_integration import TwilioIntegrationClient
+
+    lookup = SimpleNamespace(
+        valid=True,
+        phone_number="+919748572321",
+        country_code="IN",
+        line_type_intelligence={"carrier_name": "Airtel", "type": "mobile"},
+        url="https://lookups.twilio.com/v2/PhoneNumbers/+919748572321",
+    )
+    phone_numbers = MagicMock()
+    phone_numbers.fetch.return_value = lookup
+    client = MagicMock()
+    client.lookups.v2.phone_numbers.return_value = phone_numbers
+    redis = MagicMock()
+    redis.get.return_value = None
+
+    integration = TwilioIntegrationClient(get_settings())
+    with patch.object(integration, "_client", return_value=client), patch(
+        "kavach_saathi.redis_client.get_redis", return_value=redis
+    ):
+        result = integration.lookup_phone("9748572321", "IN")
+
+    assert result["valid"] is True
+    assert result["normalized_number"] == "+919748572321"
+    assert result["line_type"] == "mobile"
+    assert result["provider_ref"] == lookup.url
+
+
+def test_programmable_whatsapp_otp_uses_sandbox_and_redis():
+    from kavach_saathi.config import get_settings
+    from kavach_saathi.providers.twilio_integration import TwilioIntegrationClient
+
+    stored = {}
+    redis = MagicMock()
+    redis.setex.side_effect = lambda key, _ttl, value: stored.__setitem__(key, value)
+    redis.get.side_effect = lambda key: stored.get(key)
+    redis.ttl.return_value = 300
+    redis.delete.side_effect = lambda key: stored.pop(key, None)
+    twilio = MagicMock()
+    twilio.messages.create.return_value = SimpleNamespace(sid="SM-OTP-TEST")
+    integration = TwilioIntegrationClient(get_settings())
+
+    with (
+        patch.object(integration, "_client", return_value=twilio),
+        patch("kavach_saathi.redis_client.get_redis", return_value=redis),
+        patch("kavach_saathi.providers.twilio_integration.secrets.randbelow", return_value=23456),
+    ):
+        sid = integration.send_programmable_whatsapp_otp(
+            "+919748572321",
+            purpose="delivery",
+            reference_id="O-OTP-TEST",
+        )
+        assert sid == "SM-OTP-TEST"
+        assert not integration.check_programmable_whatsapp_otp(
+            "+919748572321",
+            "000000",
+            purpose="delivery",
+            reference_id="O-OTP-TEST",
+        )
+        assert integration.check_programmable_whatsapp_otp(
+            "+919748572321",
+            "123456",
+            purpose="delivery",
+            reference_id="O-OTP-TEST",
+        )
+
+    twilio.messages.create.assert_called_once()
+    assert "otp:delivery:O-OTP-TEST" not in stored
 
 
 def cleanup_entities(session):
@@ -345,7 +419,7 @@ def test_audio_requests_follow_the_explicit_ui_flow():
 
 
 def test_vishwas_saathi_detects_roman_hindi_and_english():
-    from kavach_saathi.agents.voice import detect_chat_language
+    from kavach_saathi.agents.voice import VoiceQAAgent, detect_chat_language
 
     assert detect_chat_language("Iss kapde ka rang and material kaisa hai?") == "hi"
     assert detect_chat_language("इसको वॉश कैसे करें?") == "hi"
@@ -353,9 +427,56 @@ def test_vishwas_saathi_detects_roman_hindi_and_english():
     assert detect_chat_language("How should I wash this garment?") == "en"
     assert detect_chat_language("What is the color and material of this product?") == "en"
 
+    agent = VoiceQAAgent.__new__(VoiceQAAgent)
+    product = {
+        "id": "P-HINDI",
+        "name": "Cotton Kurta",
+        "price": 499,
+        "specs": {"wash_care": "gentle hand wash"},
+    }
+    answer = agent._deterministic_answer("इसको वॉश कैसे करें?", [product])
+    assert detect_chat_language(answer["hi"]) == "hi"
+    assert "gentle hand wash" in answer["hi"]
+
+
+def test_whatsapp_reply_sid_routes_two_orders_on_the_same_phone():
+    from kavach_saathi.app import resolve_whatsapp_order_id
+    from kavach_saathi.db.models import Order
+
+    redis = MagicMock()
+    values = {
+        "whatsapp:outbound:MM-ORDER-ONE": b"O-ORDER-ONE",
+        "whatsapp:outbound:MM-ORDER-TWO": b"O-ORDER-TWO",
+        "whatsapp:pending:+919748572321": b"O-ORDER-TWO",
+    }
+    redis.get.side_effect = values.get
+
+    first = resolve_whatsapp_order_id(
+        {
+            "OriginalRepliedMessageSid": "MM-ORDER-ONE",
+            "From": "whatsapp:+919748572321",
+        },
+        None,
+        redis,
+    )
+    second = resolve_whatsapp_order_id(
+        {
+            "OriginalRepliedMessageSid": "MM-ORDER-TWO",
+            "From": "whatsapp:+919748572321",
+        },
+        None,
+        redis,
+    )
+
+    assert first == "O-ORDER-ONE"
+    assert second == "O-ORDER-TWO"
+    assert Order.__table__.c.whatsapp_workflow_state.type.length == 64
+
 
 def test_delivery_boy_flow_and_reschedule():
-    from kavach_saathi.container import get_container
+    import asyncio
+
+    from kavach_saathi.delivery_api import list_assigned_deliveries
 
     session = SessionLocal()
     cleanup_entities(session)
@@ -400,16 +521,18 @@ def test_delivery_boy_flow_and_reschedule():
             id="O-CHAR-DEL-1",
             buyer_id=buyer.id,
             address_id=addr.id,
-            status="delivery_assigned",
-            delivery_boy_id=db_boy.id,
+            status=OrderStatus.DELIVERY_SCHEDULED,
             total_amount=150.0,
             payment_mode="cod",
         )
         session.add(order)
         session.commit()
 
-        container = get_container()
+        queue = asyncio.run(list_assigned_deliveries(user=db_boy, db=session))
+        assert any(row["order_id"] == order.id and row["queue_state"] == "pending" for row in queue)
+
         # Verify rescheduling directly
+        order.delivery_boy_id = db_boy.id
         order.promised_delivery_date = datetime.strptime("2026-07-20", "%Y-%m-%d").date()
         order.rescheduled_count = 1
         order.status = "delivery_rescheduled"

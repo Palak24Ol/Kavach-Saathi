@@ -371,7 +371,7 @@ class ReturnImageAttemptRequest(BaseModel):
 
 
 class PresignRequest(BaseModel):
-    kind: Literal["product", "catalogue", "review", "voice", "return"]
+    kind: Literal["product", "catalogue", "review", "voice", "return", "delivery"]
     filename: str
     content_type: str
 
@@ -458,11 +458,6 @@ class OtpVerifyRequest(BaseModel):
 
 class FitFeedbackRequest(BaseModel):
     feedback: Literal["good", "tight", "loose"]
-
-
-class ConfirmationRequest(BaseModel):
-    decision: Literal["confirmed", "reschedule", "cancel"]
-    scheduled_date: str | None = None
 
 
 class ChatConversationCreate(BaseModel):

@@ -20,7 +20,6 @@ import {
   Minus,
   PackageCheck,
   Package,
-  PhoneCall,
   Plus,
   RotateCcw,
   Search,
@@ -165,6 +164,10 @@ function VishwasSamvadChat({ auth, onClose, initialMessage = "", initialProduct 
   const [text, setText] = useState(initialMessage);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [recording, setRecording] = useState(false);
+  const recorderRef = useRef(null);
+  const voiceStreamRef = useRef(null);
+  const voiceChunksRef = useRef([]);
 
   const pageType = pathname?.startsWith("/products/") ? "product"
     : pathname?.startsWith("/account/orders") ? "orders"
@@ -202,26 +205,67 @@ function VishwasSamvadChat({ auth, onClose, initialMessage = "", initialProduct 
     return () => { active = false; };
   }, [auth?.user, initialProduct?.id, pageType, pathname]);
 
-  async function sendMessage(event) {
-    event?.preventDefault();
-    const content = text.trim();
-    if (!content || !conversation || busy) return;
+  async function submitMessage({ content = "", audioKey = null }) {
+    if ((!content && !audioKey) || !conversation || busy) return;
     setBusy(true);
     setError("");
     try {
       const result = await post("/chat/messages", {
         conversation_id: conversation.id,
         text: content,
-        language: auth.user.preferred_language || "hi",
+        audio_key: audioKey,
+        language: "auto",
         idempotency_key: crypto.randomUUID(),
       });
       setMessages((current) => [...current, result.user_message, result.assistant_message]);
       setText("");
     } catch (reason) {
-      setError(reason.message || "उत्तर भेजा नहीं जा सका।");
+      setError(reason.message || "The answer could not be sent.");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function sendMessage(event) {
+    event?.preventDefault();
+    await submitMessage({ content: text.trim() });
+  }
+
+  async function startVoiceQuestion() {
+    if (busy || recording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      voiceStreamRef.current = stream;
+      recorderRef.current = recorder;
+      voiceChunksRef.current = [];
+      recorder.ondataavailable = (event) => { if (event.data.size) voiceChunksRef.current.push(event.data); };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((track) => track.stop());
+        voiceStreamRef.current = null;
+        setRecording(false);
+        const blob = new Blob(voiceChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+        try {
+          setBusy(true);
+          const presign = await post("/uploads/presign", { kind: "voice", filename: "vishwas-question.webm", content_type: blob.type || "audio/webm" });
+          const uploaded = await fetch(presign.upload_url, { method: "PUT", body: blob, headers: { "Content-Type": blob.type || "audio/webm" } });
+          if (!uploaded.ok) throw new Error("Voice upload failed.");
+          setBusy(false);
+          await submitMessage({ audioKey: presign.object_key });
+        } catch (reason) {
+          setBusy(false);
+          setError(reason.message || "The voice question could not be processed.");
+        }
+      };
+      recorder.start();
+      setRecording(true);
+    } catch (reason) {
+      setError(reason.message || "Microphone access was not granted.");
+    }
+  }
+
+  function stopVoiceQuestion() {
+    if (recorderRef.current?.state === "recording") recorderRef.current.stop();
   }
 
   async function startNewConversation() {
@@ -247,26 +291,26 @@ function VishwasSamvadChat({ auth, onClose, initialMessage = "", initialProduct 
   }
 
   if (!auth?.user || auth.user.role !== "buyer") {
-    return <div className="vishwas-samvad-empty"><strong>विश्वास संवाद</strong><p>बातचीत जारी रखने के लिए buyer account से login करें।</p><button type="button" onClick={onClose}>बंद करें</button></div>;
+    return <div className="vishwas-samvad-empty"><strong>Vishwas Saathi</strong><p>Log in with a buyer account to continue the conversation.</p><button type="button" onClick={onClose}>Close</button></div>;
   }
 
   return (
-    <section aria-label="विश्वास संवाद chat" className="vishwas-samvad-chat">
-      <header className="vishwas-samvad-header"><div><strong>विश्वास संवाद</strong><small>इस पेज, उत्पाद, ऑर्डर या खरीदारी से जुड़ा सवाल पूछें।</small></div><div className="vishwas-samvad-header-actions"><button type="button" onClick={startNewConversation} disabled={busy}>नई बातचीत</button><button type="button" onClick={onClose} aria-label="Close chat"><X size={18} /></button></div></header>
-      {conversations.length > 1 && <label className="vishwas-conversation-picker">हाल की बातचीत<select value={conversation?.id || ""} onChange={(event) => refreshConversation(conversations.find((item) => item.id === event.target.value))}>{conversations.map((item) => <option value={item.id} key={item.id}>{new Date(item.created_at).toLocaleString("en-IN")} · {item.status}</option>)}</select></label>}
+    <section aria-label="Vishwas Saathi chat" className="vishwas-samvad-chat">
+      <header className="vishwas-samvad-header"><div><strong>Vishwas Saathi</strong><small>Ask about this page, product, order, return, or shopping journey.</small></div><div className="vishwas-samvad-header-actions"><button type="button" onClick={startNewConversation} disabled={busy}>New conversation</button><button type="button" onClick={onClose} aria-label="Close chat"><X size={18} /></button></div></header>
+      {conversations.length > 1 && <label className="vishwas-conversation-picker">Recent conversations<select value={conversation?.id || ""} onChange={(event) => refreshConversation(conversations.find((item) => item.id === event.target.value))}>{conversations.map((item) => <option value={item.id} key={item.id}>{new Date(item.created_at).toLocaleString("en-IN")} · {item.status}</option>)}</select></label>}
       <div className="vishwas-samvad-messages-container" aria-live="polite">
-        {!messages.length && <div className="vishwas-samvad-empty"><MessageCircle size={24} /><p>मैं केवल आपके अधिकृत पेज और रिकॉर्ड से मिले प्रमाण के आधार पर जवाब दूँगा।</p></div>}
-        {messages.map((message) => <div className={`vishwas-message ${message.sender}`} key={message.id}><span>{message.content}</span></div>)}
-        {busy && <div className="vishwas-message assistant"><LoaderCircle className="spin" size={16} /> प्रमाण देख रहा हूँ…</div>}
+        {!messages.length && <div className="vishwas-samvad-empty"><MessageCircle size={24} /><p>I answer only from evidence in your authorized page and records.</p></div>}
+        {messages.map((message) => { const answerAudio = message.sender === "assistant" ? message.metadata_json?.data?.audio_key : null; return <div className={`vishwas-message ${message.sender}`} key={message.id}><span>{message.content}</span>{answerAudio && <audio controls preload="none" src={audioUrl(answerAudio)}>Your browser does not support audio playback.</audio>}</div>; })}
+        {busy && <div className="vishwas-message assistant"><LoaderCircle className="spin" size={16} /> Checking the evidence…</div>}
       </div>
-      {!!initialPrompts.length && <div className="vishwas-prompts">{initialPrompts.map((prompt) => <button type="button" key={prompt} onClick={() => setText(prompt)}>{prompt}</button>)}</div>}
+      {!messages.length && !!initialPrompts.length && <div className="vishwas-prompts" aria-label="Suggested questions">{initialPrompts.map((prompt) => <button type="button" key={prompt} onClick={() => setText(prompt)}>{prompt}</button>)}</div>}
       {error && <p className="field-error">{error}</p>}
-      <form className="vishwas-samvad-input-area" onSubmit={sendMessage}><input value={text} onChange={(event) => setText(event.target.value)} placeholder="अपना सवाल लिखें…" aria-label="विश्वास संवाद message" /><button className="vishwas-samvad-send-btn" type="submit" disabled={busy || !text.trim()}>भेजें</button></form>
+      <form className="vishwas-samvad-input-area" onSubmit={sendMessage}><input value={text} onChange={(event) => setText(event.target.value)} placeholder="Type your question…" aria-label="Vishwas Saathi message" /><button type="button" className="secondary-cta compact" onClick={recording ? stopVoiceQuestion : startVoiceQuestion} disabled={busy} aria-label={recording ? "Stop recording" : "Record a voice question"}>{recording ? "Stop" : <Mic size={16} />}</button><button className="vishwas-samvad-send-btn" type="submit" disabled={busy || !text.trim()}>Send</button></form>
     </section>
   );
 }
 
-function ProductPageView({ product, similarProducts, busy, cart, cartBusy, onBack, onClose, onAdd, onUpdateCart, onOpenCart, onWishlist, wished, onSize, onReview, sizeSaathi, onOpenVishwasSamvad, onOpenProduct }) {
+function ProductPageView({ product, busy, cart, cartBusy, onBack, onClose, onAdd, onUpdateCart, onOpenCart, onWishlist, wished, onSize, onReview, sizeSaathi, onOpenVishwasSamvad }) {
   const [size, setSize] = useState("");
 
   useEffect(() => {
@@ -296,8 +340,8 @@ function ProductPageView({ product, similarProducts, busy, cart, cartBusy, onBac
       </header>
       <main className="product-page" aria-label={product.name}>
         <div className="drawer-gallery four-view-gallery">
-          {(product.catalogue_images?.length ? product.catalogue_images : ["front", "back", "left", "right"].map((angle) => ({ angle, url: product.image_url }))).map((image) => <figure key={image.angle}><img src={assetUrl(image.url)} alt={`${product.name} ${image.angle} view`} /><figcaption>{image.angle === "left" || image.angle === "right" ? `${image.angle} side` : image.angle}</figcaption></figure>)}
           <span><ShieldCheck size={15} /> Verified listing</span>
+          {(product.catalogue_images?.length ? product.catalogue_images : ["front", "back", "left", "right"].map((angle) => ({ angle, url: product.image_url }))).map((image) => <figure key={image.angle}><img src={assetUrl(image.url)} alt={`${product.name} ${image.angle} view`} /><figcaption>{image.angle === "left" || image.angle === "right" ? `${image.angle} side` : image.angle}</figcaption></figure>)}
         </div>
         <div className="drawer-content">
           <p className="drawer-category">{product.category}</p>
@@ -310,10 +354,10 @@ function ProductPageView({ product, similarProducts, busy, cart, cartBusy, onBac
 
           {!!sizes.length && <div className="size-section"><div className="section-label"><strong>Select size</strong><button type="button" onClick={onSize} disabled={busy}>{busy ? <LoaderCircle className="spin" size={13} /> : <Sparkles size={13} />} Ask Size Saathi</button></div><div className="size-row">{sizes.map((item) => <button className={selectedSize === item ? "selected" : ""} type="button" key={item} onClick={() => setSize(item)}>{item}</button>)}</div>{!selectedSize && <small>Choose a size, or ask Size Saathi for evidence-based guidance. No size is preselected.</small>}{sizeSaathi && <div className="agent-answer size-saathi-answer">{sizeSaathi.size ? <strong>{sizeSaathi.source === "product_popularity" ? "Popular-size fallback" : "Size Saathi recommendation"}: {sizeSaathi.size}</strong> : <strong>More information needed</strong>}{sizeSaathi.message && <span>{sizeSaathi.message}</span>}</div>}</div>}
 
-          <section className="trust-banner" aria-label="विश्वास संवाद">
+          <section className="trust-banner" aria-label="Vishwas Saathi">
             <MessageCircle size={19} />
-            <div><strong>विश्वास संवाद</strong><p>इस उत्पाद, साइज़ या खरीदारी से जुड़ा सवाल पूछें।</p></div>
-            <button type="button" className="secondary-cta compact" onClick={() => onOpenVishwasSamvad(product)}>पूछें</button>
+            <div><strong>Vishwas Saathi</strong><p>Ask about this product, sizing, or your shopping journey.</p></div>
+            <button type="button" className="secondary-cta compact" onClick={() => onOpenVishwasSamvad(product)}>Ask</button>
           </section>
 
           <dl className="spec-list">
@@ -410,20 +454,6 @@ function ProductPageView({ product, similarProducts, busy, cart, cartBusy, onBac
             </div>
           )}
           
-          {!!similarProducts?.length && (
-            <section className="similar-products">
-              <label>Similar products verified by Saathi</label>
-              <div className="product-grid">
-                {similarProducts.map((p) => (
-                  <button type="button" key={p.id} className="product-card" onClick={() => onOpenProduct(p.id)}>
-                    <img src={assetUrl(p.image_url)} alt={p.name} />
-                    <strong>{p.name}</strong>
-                    <span>{money(p.price)}</span>
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
         </div>
       </main>
 
@@ -524,7 +554,7 @@ function CartDrawer({ items, open, busyItem, onClose, onUpdate, onRemove, onChec
   );
 }
 
-function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onOpenProduct, onRemoveWishlist, onStartReturn, onStartReview, onViewReturn, onSubmitFitFeedback, onSimulateConfirmation, fullScreen = false }) {
+function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onOpenProduct, onRemoveWishlist, onStartReturn, onStartReview, onViewReturn, onSubmitFitFeedback, fullScreen = false }) {
   const title = type === "orders" ? "My Orders" : type === "wishlist" ? "My Wishlist" : "My Returns";
   const items = type === "orders" ? orders : type === "wishlist" ? wishlist : returns;
 
@@ -539,6 +569,25 @@ function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onO
   // (e.g. into RETURN_INITIATED) -- any of these still means the order was
   // delivered, so its other, untouched items should still show Return/Exchange/Review.
   const POST_DELIVERY_STATUSES = ["DELIVERED", "RETURN_INITIATED", "RETURN_UNDER_REVIEW", "RETURN_APPROVED", "RETURN_REJECTED", "MANUAL_INSPECTION", "CLOSED"];
+
+  function confirmationMessage(order) {
+    const state = order.whatsapp_workflow_state;
+    if (state === "awaiting_order_confirmation" || state === "ownership_prompt_sent" || order.status === "AWAITING_BUYER_CONFIRMATION") return "Please confirm on WhatsApp that you placed this order.";
+    if (state === "awaiting_delivery_date_confirmation") return `Order confirmed. Please confirm the proposed delivery date${order.promised_delivery_date ? ` (${new Date(order.promised_delivery_date).toLocaleDateString("en-IN")})` : ""} on WhatsApp.`;
+    if (state === "awaiting_reschedule_choice") return "Choose your preferred rescheduled delivery date on WhatsApp.";
+    if (state === "delivery_scheduled" || order.status === "DELIVERY_SCHEDULED") return `Confirmed on WhatsApp. Your order will be delivered${order.promised_delivery_date ? ` by ${new Date(order.promised_delivery_date).toLocaleDateString("en-IN")}` : " soon"}.`;
+    if (state === "awaiting_cancellation_confirmation") return "Please confirm on WhatsApp whether you want to keep or cancel this order.";
+    return "We will update you as this order moves toward delivery.";
+  }
+
+  function orderStatusLabel(order) {
+    const state = order.whatsapp_workflow_state;
+    if (state === "awaiting_order_confirmation" || state === "ownership_prompt_sent") return "WHATSAPP CONFIRMATION PENDING";
+    if (state === "awaiting_delivery_date_confirmation") return "DELIVERY DATE CONFIRMATION PENDING";
+    if (state === "awaiting_reschedule_choice") return "RESCHEDULE DATE PENDING";
+    if (state === "delivery_scheduled") return "DELIVERY SCHEDULED";
+    return (order.status || "PROCESSING").replaceAll("_", " ");
+  }
 
   const drawerContent = (
     <aside className={fullScreen ? "full-screen-account-page" : "side-drawer account-data-drawer"} role="dialog" aria-modal="true" aria-label={title} style={fullScreen ? { width: "100%", background: "white", padding: "24px", borderRadius: "12px", border: "1px solid var(--border)", boxShadow: "0 1px 3px rgba(0,0,0,0.05)", position: "relative" } : {}}>
@@ -561,7 +610,7 @@ function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onO
                   <strong style={{ fontSize: "14px" }}>{order.id}</strong>
                   {order.exchange_tag && <span style={{ marginLeft: "6px", background: "#ede9fe", color: "#7c3aed", padding: "1px 6px", borderRadius: "4px", fontSize: "11px", fontWeight: "600" }}>EXCHANGE</span>}
                 </div>
-                <span style={{ fontSize: "11px", fontWeight: "600", color: statusColor(order.status), background: "#f8fafc", padding: "2px 8px", borderRadius: "4px" }}>{order.status}</span>
+                <span style={{ fontSize: "11px", fontWeight: "600", color: statusColor(order.status), background: "#f8fafc", padding: "2px 8px", borderRadius: "4px" }}>{orderStatusLabel(order)}</span>
               </div>
               <p style={{ margin: "0 0 8px", color: "#64748b", fontSize: "13px" }}>
                 {new Date(order.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" })} · {money(order.total_amount)} · {order.payment_mode?.toUpperCase()}
@@ -621,11 +670,9 @@ function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onO
                 </div>
               )}
               {!["DELIVERED", "RETURN_INITIATED", "RETURN_UNDER_REVIEW", "MANUAL_INSPECTION", "RETURN_APPROVED", "CLOSED", "CANCELLED"].includes(order.status) && (
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
-                  <small style={{ color: "#94a3b8", fontSize: "12px" }}>Return available after delivery</small>
-                  <button type="button" className="secondary-cta compact" style={{ fontSize: "11px" }} onClick={() => onSimulateConfirmation(order.id)}>
-                    <PhoneCall size={12} /> Simulate confirmation call
-                  </button>
+                <div style={{ display: "flex", flexDirection: "column", gap: "5px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "6px", padding: "8px 10px" }}>
+                  <strong style={{ color: "#1d4ed8", fontSize: "12px" }}>{confirmationMessage(order)}</strong>
+                  <small style={{ color: "#64748b", fontSize: "11px" }}>Return and review options become available after delivery.</small>
                 </div>
               )}
             </article>
@@ -1025,7 +1072,7 @@ function CheckoutDrawer({
   const selectedAddress = addresses.find((a) => a.id === selectedAddressId);
   const isValidAddress =
     selectedAddress &&
-    selectedAddress.phone_verified &&
+    selectedAddress.phone_lookup_validated &&
     selectedAddress.validation_status === "valid" &&
     selectedAddress.digipin;
 
@@ -1075,10 +1122,10 @@ function CheckoutDrawer({
                           {addr.address_line1}, {addr.city}, {addr.state} - {addr.postal_pin}
                         </p>
                         <div style={{ display: "flex", gap: "8px", marginTop: "6px", fontSize: "11px" }}>
-                          {addr.phone_verified ? (
-                            <span style={{ color: "#16a34a" }}>✓ Phone Verified</span>
+                          {addr.phone_lookup_validated ? (
+                            <span style={{ color: "#16a34a" }}>✓ Phone Validated</span>
                           ) : (
-                            <span style={{ color: "#ef4444" }}>✗ Phone Unverified</span>
+                            <span style={{ color: "#ef4444" }}>✗ Phone Validation Required</span>
                           )}
                           {addr.validation_status === "valid" ? (
                             <span style={{ color: "#16a34a" }}>✓ Address Valid</span>
@@ -1117,14 +1164,14 @@ function CheckoutDrawer({
             )}
 
             {isValidAddress && (
-              <div className="consent-box" style={{ margin: 0 }}><Truck size={19} /><div><strong>Delivery confirmation verification</strong><p>A scheduled verification call confirms buyer availability before delivery.</p></div></div>
+              <div className="consent-box" style={{ margin: 0 }}><Truck size={19} /><div><strong>WhatsApp delivery confirmation</strong><p>After placing the order, confirm ownership and your delivery date through WhatsApp.</p></div></div>
             )}
 
             {selectedAddress && (
               <div>
                 {!isValidAddress ? (
                   <div style={{ background: "#fef3c7", border: "1px solid #fde68a", padding: "12px", borderRadius: "8px", color: "#d97706", fontSize: "13px" }}>
-                    <strong>Validation failed:</strong> This address cannot be used for checkout. Please make sure the phone number is verified via OTP and coordinates match the address details.
+                    <strong>Validation failed:</strong> This address cannot be used for checkout. Confirm that the phone number passes carrier validation and that the coordinates match the address details.
                   </div>
                 ) : (
                   <button
@@ -1619,8 +1666,9 @@ function AddressManagerDrawer({ open, onClose, buyerId, fullScreen = false }) {
                 <label htmlFor="address-phone" style={{ fontWeight: 600 }}>Phone Number *</label>
                 <div style={{ display: "flex", gap: "8px" }}>
                   <select value={formData.country} onChange={(e) => setFormData({ ...formData, country: e.target.value })} aria-label="Phone country"><option>India</option><option>United States</option><option>United Kingdom</option></select>
-                  <input id="address-phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="+919876543210" required style={{ flex: 1 }} />
+                  <input id="address-phone" value={formData.phone} onChange={(e) => setFormData({ ...formData, phone: e.target.value })} placeholder="9876543210 or +919876543210" inputMode="tel" autoComplete="tel" required style={{ flex: 1 }} />
                 </div>
+                <small>For India, enter either the 10-digit mobile number or +91 followed by the number.</small>
                 {fieldErrors.phone && <small className="field-error">{fieldErrors.phone}</small>}
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
@@ -1836,10 +1884,6 @@ export default function Storefront({ initialProductId = null }) {
   const [reviewComposerBusy, setReviewComposerBusy] = useState(false);
   const [reviewComposerError, setReviewComposerError] = useState("");
 
-  const [confirmationCallData, setConfirmationCallData] = useState(null); // { orderId }
-  const [confirmationCallBusy, setConfirmationCallBusy] = useState(false);
-  const [confirmationCallError, setConfirmationCallError] = useState("");
-
   const [actionDialogConfig, setActionDialogConfig] = useState(null); // { title, text, type }
 
   const [cardPaymentData, setCardPaymentData] = useState(null); // { addressId, amount, orderId }
@@ -1851,7 +1895,6 @@ export default function Storefront({ initialProductId = null }) {
   const [category, setCategory] = useState("All");
   const [visibleCount, setVisibleCount] = useState(50);
   const [selected, setSelected] = useState(null);
-  const [similarProducts, setSimilarProducts] = useState([]);
   const [drawer, setDrawer] = useState(null);
   const [cart, setCart] = useState([]);
   const [cartBusy, setCartBusy] = useState(null);
@@ -1885,8 +1928,8 @@ export default function Storefront({ initialProductId = null }) {
     reviewSummary ||
     returnRequestData ||
     reviewComposerData ||
-    confirmationCallData ||
-    actionDialogConfig
+    actionDialogConfig ||
+    cardPaymentData
   );
 
   useEffect(() => {
@@ -1913,17 +1956,6 @@ export default function Storefront({ initialProductId = null }) {
       .finally(() => setLoading(false));
   }, [initialProductId]);
 
-  useEffect(() => {
-    if (!selected?.id) {
-      return;
-    }
-    let active = true;
-    request(`/storefront/products/${selected.id}/similar`)
-      .then((payload) => { if (active) setSimilarProducts(payload.items || []); })
-      .catch(() => { if (active) setSimilarProducts([]); });
-    return () => { active = false; };
-  }, [selected?.id]);
-
   async function refreshCart() {
     if (!auth?.user) {
       setCart([]);
@@ -1949,6 +1981,15 @@ export default function Storefront({ initialProductId = null }) {
       .then((data) => setCart(data.items))
       .catch((reason) => setToast(reason.message || "Could not load your cart"));
   }, [auth?.user]);
+
+  useEffect(() => {
+    const viewingOrders = drawer === "orders" || pathname?.startsWith("/account/orders");
+    if (!viewingOrders || auth?.user?.role !== "buyer") return undefined;
+    const interval = window.setInterval(() => {
+      listMyOrders().then(setOrders).catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [auth?.user?.role, drawer, pathname]);
 
   async function refreshAccountData() {
     if (!auth?.user || auth.user.role !== "buyer") {
@@ -2001,25 +2042,38 @@ export default function Storefront({ initialProductId = null }) {
 
   function openVishwasSamvad(product = null, options = {}) {
     requireAuth(() => {
-      setVishwasInitialProduct(product || selected || null);
-      setVishwasInitialMsg(options.message || (product ? "मेरा सही साइज़ बताने में मदद करें।" : ""));
-      setVishwasInitialPrompts(options.prompts || (product ? ["मेरा सामान्य साइज़", "शरीर का प्रकार", "ऊंचाई", "छाती/कमर के माप"] : []));
+      const contextProduct = product || selected || null;
+      setVishwasInitialProduct(contextProduct);
+      setVishwasInitialMsg(options.message || "");
+      setVishwasInitialPrompts(options.prompts || (contextProduct ? [
+        "Is kapde ka material kaisa hai?",
+        "Is kapde ki return policy kya hai?",
+        "Is kapde ka rang kya hai?",
+      ] : []));
       setVishwasOpen(true);
     });
   }
 
   function handleAuthenticated(session) {
+    const pendingAction = pendingAfterAuth;
     setAuth(session);
     setAuthModalOpen(false);
     setToast(`Welcome, ${session.user.name}`);
+    setPendingAfterAuth(null);
     if (session.user.role === "delivery_boy") {
       router.push("/delivery");
       return;
     }
-    if (pendingAfterAuth) {
-      pendingAfterAuth(session.user.id);
-      setPendingAfterAuth(null);
+    if (session.user.role === "seller") {
+      router.push("/seller");
+      return;
     }
+    if (session.user.role === "admin") {
+      router.push("/admin");
+      return;
+    }
+    router.push("/");
+    if (pendingAction) pendingAction(session.user.id);
   }
 
   function handleLogout() {
@@ -2048,26 +2102,6 @@ export default function Storefront({ initialProductId = null }) {
     } catch (reason) { setToast(reason.message || "Could not save fit feedback"); }
   }
 
-  function simulateConfirmation(orderId) {
-    setConfirmationCallData({ orderId });
-    setConfirmationCallError("");
-  }
-
-  async function handleConfirmationCallSubmit(decision) {
-    if (!confirmationCallData) return;
-    setConfirmationCallBusy(true);
-    setConfirmationCallError("");
-    try {
-      await post(`/orders/${confirmationCallData.orderId}/confirm-simulated`, { decision });
-      setConfirmationCallData(null);
-      await refreshAccountData();
-      setToast("Delivery confirmation recorded.");
-    } catch (reason) {
-      setConfirmationCallError(reason.message || "Could not record confirmation");
-    } finally {
-      setConfirmationCallBusy(false);
-    }
-  }
 
   function startReturn(orderId, productId, returnType = "refund") {
     setReturnRequestData({ orderId, productId, returnType });
@@ -2147,18 +2181,6 @@ export default function Storefront({ initialProductId = null }) {
     setDrawer("return-verify");
   }
 
-
-  async function changeLanguage(languageCode) {
-    if (!auth?.user) return;
-    try {
-      const updated = await patch("/auth/language", { language: languageCode });
-      setAuth((current) => ({ ...current, user: { ...current.user, preferred_language: updated.preferred_language } }));
-      const label = LANGUAGE_OPTIONS.find((opt) => opt.code === languageCode)?.label || languageCode;
-      setToast(`Language set to ${label}`);
-    } catch (reason) {
-      setToast(reason.message || "Could not update language");
-    }
-  }
 
   useEffect(() => {
     if (!toast) return undefined;
@@ -2265,24 +2287,13 @@ export default function Storefront({ initialProductId = null }) {
   async function recommendSize() {
     if (!selected) return;
     requireAuth(async (buyerId) => {
-      const language = auth?.user?.preferred_language || "hi";
       setSizeSaathi(null);
-      // Routes through the voice workflow (Agent 3 size RAG, then Agent 5 hands the
-      // recommendation straight to Sarvam TTS) so the reply is spoken and transcribed
-      // in the buyer's chosen language instead of a plain English-only toast.
-      const payload = await execute("Size Saathi is translating size history and preparing a recommendation...", () => post("/voice/query", { buyer_id: buyerId, product_id: selected.id, text: "Mujhe kaunsa size lena chahiye?", language }));
+      const payload = await execute("Size Saathi is checking purchase and fit history...", () => post("/size/recommend", { buyer_id: buyerId, product_id: selected.id }));
       const sizeResult = payload.results.size_translator;
       const recommendation = sizeResult?.data?.recommended_size;
-      const voiceResult = payload.results.voice_qa;
-      const message = voiceResult?.user_message?.[language] || voiceResult?.summary || "";
-      setSizeSaathi({ size: recommendation || null, source: sizeResult?.data?.source, message, audioKey: voiceResult?.data?.audio_key || null });
+      const message = sizeResult?.user_message?.en || sizeResult?.summary || "";
+      setSizeSaathi({ size: recommendation || null, source: sizeResult?.data?.source, message });
       if (recommendation) setToast(`Size Saathi recommends ${recommendation}`);
-      if (sizeResult?.data?.needs_guidance) {
-        openVishwasSamvad(selected, {
-          message: "मेरा सही साइज़ बताने में मदद करें।",
-          prompts: ["मेरा सामान्य साइज़", "शरीर का प्रकार", "ऊंचाई", "छाती/कमर के माप"],
-        });
-      }
     });
   }
 
@@ -2357,8 +2368,8 @@ export default function Storefront({ initialProductId = null }) {
       setLastOrderSummary({ amount: order.total_amount, paymentMode: "cod", address: addresses.find((item) => item.id === addressId) });
       setToast(
         order.delivery_confirmation_queued
-          ? "Order placed — Agent 7 delivery verification is queued"
-          : "Order placed, but delivery verification could not be queued"
+          ? "Order placed — please confirm it on WhatsApp"
+          : "Order placed, but the WhatsApp confirmation could not be queued"
       );
       await refreshCart();
       await refreshAccountData();
@@ -2404,8 +2415,8 @@ export default function Storefront({ initialProductId = null }) {
       setLastOrderSummary({ amount: cardPaymentData.amount, paymentMode: "prepaid", address: selectedAddress });
       setToast(
         payment.delivery_confirmation_queued
-          ? "Payment verified — delivery verification call is scheduled"
-          : "Payment verified, but delivery verification could not be scheduled"
+          ? "Payment verified — please confirm the order on WhatsApp"
+          : "Payment verified, but the WhatsApp confirmation could not be scheduled"
       );
       setCardPaymentData(null);
       await refreshCart();
@@ -2425,7 +2436,6 @@ export default function Storefront({ initialProductId = null }) {
       <>
         <ProductPageView
           product={selected}
-          similarProducts={similarProducts}
           busy={busy}
           cart={cart}
           cartBusy={cartBusy}
@@ -2440,7 +2450,6 @@ export default function Storefront({ initialProductId = null }) {
           onReview={checkReview}
           sizeSaathi={sizeSaathi ? { ...sizeSaathi, audioUrl: audioUrl(sizeSaathi.audioKey) } : null}
           onOpenVishwasSamvad={openVishwasSamvad}
-          onOpenProduct={(productId) => router.push(`/products/${productId}`)}
         />
         {!isOverlayOpen && (
           <button type="button" className="vishwas-samvad-launcher-btn" onClick={() => openVishwasSamvad(selected)} aria-label="Open Vishwas Saathi"><MessageCircle size={18} /><span><strong>Vishwas Saathi</strong><small>Ask about this product or your shopping journey</small></span></button>
@@ -2449,10 +2458,21 @@ export default function Storefront({ initialProductId = null }) {
         <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} />
         <CheckoutDrawer open={drawer === "checkout"} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => setDrawer("orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => setDrawer("addresses")} buyerName={auth?.user?.name} />
         <AddressManagerDrawer open={drawer === "addresses"} onClose={() => { setDrawer(null); refreshAccountData(); }} buyerId={auth?.user?.id} />
-        <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSimulateConfirmation={simulateConfirmation} />
+        <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} />
         <ReturnVerificationDrawer open={drawer === "return-verify"} returnId={selectedReturnId} returns={returns} orders={orders} onClose={() => { setDrawer(null); refreshAccountData(); }} onRefreshData={refreshAccountData} />
         <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
         <ReviewSummaryDialog data={reviewSummary} onClose={() => setReviewSummary(null)} />
+        {cardPaymentData && (
+          <CardPaymentDialog
+            key={cardPaymentData.orderId}
+            isOpen={true}
+            onClose={() => setCardPaymentData(null)}
+            onSubmit={handleCardPaymentSubmit}
+            amount={cardPaymentData.amount}
+            busy={cardPaymentBusy}
+            error={cardPaymentError}
+          />
+        )}
         {toast && <div className="toast" role="status" aria-live="polite"><Check size={16} /> {toast}</div>}
       </>
     );
@@ -2468,15 +2488,10 @@ export default function Storefront({ initialProductId = null }) {
           <a className="logo" href="#top"><span>K</span><div><strong>Kavach</strong><small>SAATHI SHOP</small></div></a>
           <label className="search-box"><Search size={19} /><input value={search} onChange={(event) => { setSearch(event.target.value); setVisibleCount(50); }} placeholder="Try Saree, Kurti or Search by Product Code" /><kbd>⌘ K</kbd></label>
           <nav className={`utility-nav ${mobileNavOpen ? "open" : ""}`} aria-label="Account navigation">
-            <button type="button" onClick={() => openVishwasSamvad()}><MessageCircle size={19} /><span>विश्वास संवाद</span></button>
+            <button type="button" onClick={() => openVishwasSamvad()}><MessageCircle size={19} /><span>Vishwas Saathi</span></button>
             <button type="button" onClick={() => router.push("/support")}><Headphones size={19} /><span>Support</span></button>
             {auth?.user ? (
               <>
-                <label className="language-picker">
-                  <select value={auth.user.preferred_language} onChange={(event) => changeLanguage(event.target.value)} aria-label="Preferred language">
-                    {LANGUAGE_OPTIONS.map((option) => <option key={option.code} value={option.code}>{option.label}</option>)}
-                  </select>
-                </label>
                 <div className="account-menu"><button type="button" onClick={() => setAccountMenuOpen((open) => !open)} aria-expanded={accountMenuOpen} title={auth.user.email || auth.user.phone}><CircleUserRound size={19} /><span>{auth.user.name}</span><ChevronDown size={14} /></button>{accountMenuOpen && <div className="account-dropdown">
                   <button type="button" onClick={() => { setDrawer("orders"); setAccountMenuOpen(false); }}><Package size={14} /> My Orders <small>{orders.length}</small></button>
                   <button type="button" onClick={() => { setDrawer("cart"); setAccountMenuOpen(false); }}><ShoppingCart size={14} /> My Cart <small>{cart.reduce((sum, item) => sum + item.qty, 0)}</small></button>
@@ -2499,11 +2514,11 @@ export default function Storefront({ initialProductId = null }) {
         {pathname === "/account/cart" ? (
           <CartDrawer items={cart} open={true} busyItem={cartBusy} onClose={() => router.push("/")} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} fullScreen={true} />
         ) : pathname === "/account/orders" ? (
-          <AccountDataDrawer type="orders" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSimulateConfirmation={simulateConfirmation} fullScreen={true} />
+          <AccountDataDrawer type="orders" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} fullScreen={true} />
         ) : pathname === "/account/returns" ? (
-          <AccountDataDrawer type="returns" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSimulateConfirmation={simulateConfirmation} fullScreen={true} />
+          <AccountDataDrawer type="returns" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} fullScreen={true} />
         ) : pathname === "/account/wishlist" ? (
-          <AccountDataDrawer type="wishlist" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSimulateConfirmation={simulateConfirmation} fullScreen={true} />
+          <AccountDataDrawer type="wishlist" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} fullScreen={true} />
         ) : pathname === "/account/addresses" ? (
           <AddressManagerDrawer open={true} onClose={() => router.push("/")} buyerId={auth?.user?.id} fullScreen={true} />
         ) : (
@@ -2548,7 +2563,7 @@ export default function Storefront({ initialProductId = null }) {
       {!isAccountPage && <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} />}
       <CheckoutDrawer open={drawer === "checkout"} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => router.push("/account/orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => router.push("/account/addresses")} buyerName={auth?.user?.name} />
       {!isAccountPage && <AddressManagerDrawer open={drawer === "addresses"} onClose={() => { setDrawer(null); refreshAccountData(); }} buyerId={auth?.user?.id} />}
-      {!isAccountPage && <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSimulateConfirmation={simulateConfirmation} />}
+      {!isAccountPage && <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} />}
       <ReturnVerificationDrawer open={drawer === "return-verify"} returnId={selectedReturnId} returns={returns} orders={orders} onClose={() => { setDrawer(null); refreshAccountData(); }} onRefreshData={refreshAccountData} />
       <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
       <ReviewSummaryDialog data={reviewSummary} onClose={() => setReviewSummary(null)} />
@@ -2572,15 +2587,6 @@ export default function Storefront({ initialProductId = null }) {
           error={reviewComposerError}
           orderId={reviewComposerData.orderId}
           product={orders.find((order) => order.id === reviewComposerData.orderId)?.items.find((item) => item.product_id === reviewComposerData.productId)}
-        />
-      )}
-      {confirmationCallData && (
-        <ConfirmationCallDialog
-          isOpen={true}
-          onClose={() => setConfirmationCallData(null)}
-          onConfirm={handleConfirmationCallSubmit}
-          busy={confirmationCallBusy}
-          error={confirmationCallError}
         />
       )}
       {actionDialogConfig && (
@@ -2828,64 +2834,6 @@ function ReviewComposerDialog({ isOpen, onClose, onSubmit, busy, error, product,
           <button type="submit" className="primary-cta" disabled={busy || fileError || !text.trim() || !file}>
             {busy ? <LoaderCircle className="spin" size={14} /> : null}
             Submit Review
-          </button>
-        </div>
-      </form>
-    </Modal>
-  );
-}
-
-function ConfirmationCallDialog({ isOpen, onClose, onConfirm, busy, error }) {
-  const [decision, setDecision] = useState("confirmed");
-
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    onConfirm(decision);
-  };
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Simulate Confirmation Call">
-      <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
-        <p style={{ margin: 0, fontSize: "14px", color: "#475569" }}>
-          Simulate the buyer&apos;s phone reply to verify availability before delivery confirmation.
-        </p>
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-          {[
-            { value: "confirmed", label: "Confirmed (Schedule Delivery)" },
-            { value: "reschedule", label: "Reschedule Call (Verify availability later)" },
-            { value: "cancel", label: "Cancel Order (Buyer requested cancellation)" }
-          ].map((option) => (
-            <label
-              key={option.value}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "8px",
-                padding: "10px",
-                border: "1px solid var(--border)",
-                borderRadius: "6px",
-                cursor: "pointer",
-                background: decision === option.value ? "#fdf0f0" : "none",
-                borderColor: decision === option.value ? "var(--accent, #e5484d)" : "var(--border)"
-              }}
-            >
-              <input
-                type="radio"
-                name="decision"
-                value={option.value}
-                checked={decision === option.value}
-                onChange={() => setDecision(option.value)}
-              />
-              <span style={{ fontSize: "14px", fontWeight: "500" }}>{option.label}</span>
-            </label>
-          ))}
-        </div>
-        {error && <div style={{ color: "#ef4444", fontSize: "13px", fontWeight: "600" }}>{error}</div>}
-        <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
-          <button type="button" className="secondary-cta" onClick={onClose} disabled={busy}>Cancel</button>
-          <button type="submit" className="primary-cta" disabled={busy}>
-            {busy ? <LoaderCircle className="spin" size={14} /> : null}
-            Submit Response
           </button>
         </div>
       </form>
