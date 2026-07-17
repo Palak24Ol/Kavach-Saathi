@@ -327,7 +327,7 @@ function AddProductTab({ onCreated }) {
           </label>
           {garmentTarget === "none" && (
             <p style={{ fontSize: "13px", color: "#64748b", marginTop: "-8px" }}>
-              This isn't a wearable garment, so Agent 1 won't generate model-wearing views — your uploaded photo will be used as the catalogue image as-is.
+              This isn&apos;t a wearable garment, so Agent 1 won&apos;t generate model-wearing views — your uploaded photo will be used as the catalogue image as-is.
             </p>
           )}
 
