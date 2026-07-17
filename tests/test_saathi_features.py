@@ -1,8 +1,9 @@
-from kavach_saathi.db.base import SessionLocal
-from kavach_saathi.db.models import Order, OrderItem, Product, ReturnRecord, User, OrderStatusHistory, Review
-from kavach_saathi.order_status import OrderStatus
 from kavach_saathi.agents.confirmation import DeliveryConfirmationAgent
+from kavach_saathi.db.base import SessionLocal
+from kavach_saathi.db.models import Order, OrderItem, OrderStatusHistory, Product, ReturnRecord, Review, User
+from kavach_saathi.order_status import OrderStatus
 from kavach_saathi.repository import CommerceRepository
+
 
 def cleanup_test_entities(session):
     session.rollback()
@@ -14,7 +15,11 @@ def cleanup_test_entities(session):
     session.commit()
 
     # 2. Delete replacement orders
-    rep_orders = session.query(Order).filter(Order.original_order_id.in_(["O-TEST-456", "O-TEST-123"]), Order.exchange_tag == True).all()
+    rep_orders = (
+        session.query(Order)
+        .filter(Order.original_order_id.in_(["O-TEST-456", "O-TEST-123"]), Order.exchange_tag)
+        .all()
+    )
     for ro in rep_orders:
         session.query(OrderItem).filter(OrderItem.order_id == ro.id).delete()
         session.query(OrderStatusHistory).filter(OrderStatusHistory.order_id == ro.id).delete()
@@ -172,7 +177,9 @@ def test_return_exchange_approval_and_replacement_order():
 
         # 2. Call record_return_decision with "approve"
         repo = CommerceRepository()
-        repo.record_return_decision("O-TEST-456", buyer_id=buyer.id, video_key="video.mp4", confidence_score=85, decision="approve")
+        repo.record_return_decision(
+            "O-TEST-456", buyer_id=buyer.id, video_key="video.mp4", confidence_score=85, decision="approve"
+        )
 
         # 3. Assert results
         session.expire_all()
@@ -203,12 +210,14 @@ def test_return_exchange_approval_and_replacement_order():
 
 
 def test_reviews_verification():
-    """Verify that submitting a review triggers multimodal verification and updates database validation fields and aggregate product rating inside a transaction."""
+    """Verify that submitting a review triggers multimodal verification and updates database
+    validation fields and aggregate product rating inside a transaction."""
     import asyncio
     from unittest.mock import AsyncMock, patch
+
     from kavach_saathi.commerce_api import create_review
+    from kavach_saathi.db.models import Product, Review
     from kavach_saathi.models import ReviewCreateRequest
-    from kavach_saathi.db.models import Review, Product
     from kavach_saathi.providers.review_provider import ReviewVerificationResult
 
     session = SessionLocal()
@@ -280,19 +289,24 @@ def test_reviews_verification():
             model="gemini-2.5-flash"
         )
 
-        from kavach_saathi.container import Container
         from kavach_saathi.config import get_settings
+        from kavach_saathi.container import Container
         container = Container(get_settings())
 
         async def run_test():
-            with patch("kavach_saathi.media_storage.read_image_bytes", AsyncMock(return_value=b"dummy_bytes")):
-                with patch("kavach_saathi.providers.review_provider.ReviewVerificationProvider.verify", AsyncMock(return_value=mock_result)):
-                    return await create_review(
-                        payload=payload,
-                        user=buyer,
-                        session=session,
-                        container=container
-                    )
+            with (
+                patch("kavach_saathi.media_storage.read_image_bytes", AsyncMock(return_value=b"dummy_bytes")),
+                patch(
+                    "kavach_saathi.providers.review_provider.ReviewVerificationProvider.verify",
+                    AsyncMock(return_value=mock_result),
+                ),
+            ):
+                return await create_review(
+                    payload=payload,
+                    user=buyer,
+                    session=session,
+                    container=container
+                )
 
         res = asyncio.run(run_test())
 
@@ -358,9 +372,10 @@ def test_return_verification_multimodal():
     """Verify that return evidence submissions execute ReturnComparisonProvider and log results properly in database."""
     import asyncio
     from unittest.mock import AsyncMock, patch
+
     from kavach_saathi.commerce_api import submit_return_image_attempt
-    from kavach_saathi.models import ReturnImageAttemptRequest
     from kavach_saathi.db.models import ReturnRecord
+    from kavach_saathi.models import ReturnImageAttemptRequest
     from kavach_saathi.providers.return_provider import ReturnComparisonResult
 
     session = SessionLocal()
@@ -453,7 +468,7 @@ def test_return_verification_multimodal():
                         session=session
                     )
 
-        res = asyncio.run(run_test())
+        asyncio.run(run_test())
 
         session.expire_all()
         updated_rec = session.get(ReturnRecord, return_rec.id)

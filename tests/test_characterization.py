@@ -1,20 +1,22 @@
-import pytest
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+from kavach_saathi.auth import authenticate_user, signup_user
 from kavach_saathi.db.base import SessionLocal
 from kavach_saathi.db.models import (
-    User,
-    Product,
-    ProductVariant,
-    CartItem,
     Address,
+    CartItem,
     Order,
     OrderItem,
     OrderStatusHistory,
+    Product,
+    ProductVariant,
     ReturnRecord,
+    User,
 )
-from kavach_saathi.auth import signup_user, authenticate_user, verify_password
 from kavach_saathi.digipin import encode
 from kavach_saathi.order_status import OrderStatus
 
@@ -104,7 +106,7 @@ def cleanup_entities(session):
     session.query(Product).filter(Product.id.like("P-CHAR-%")).delete()
     session.query(Address).filter(Address.user_id.like("B-CHAR-%")).delete()
 
-    from kavach_saathi.db.models import SellerProfile, ChatConversation, ChatMessage
+    from kavach_saathi.db.models import ChatConversation, ChatMessage, SellerProfile
 
     char_user_ids = [u.id for u in session.query(User).filter(User.email.like("%char%")).all()]
     if char_user_ids:
@@ -249,9 +251,10 @@ def test_order_and_status_history_characterization():
 
 
 def test_size_popularity_and_fallback():
-    from kavach_saathi.container import get_container
-    from kavach_saathi.models import SizeRecommendRequest, RunStatus, AgentName
     import asyncio
+
+    from kavach_saathi.container import get_container
+    from kavach_saathi.models import RunStatus, SizeRecommendRequest
 
     session = SessionLocal()
     cleanup_entities(session)
@@ -378,8 +381,8 @@ def test_vishwas_saathi_chat_persistence():
         assert chat["page_route"] == "/products/123"
 
         # Add messages
-        msg1 = container.repository.add_chat_message(chat["id"], "user", "Which size should I choose?")
-        msg2 = container.repository.add_chat_message(chat["id"], "assistant", "Welcome to Vishwas Saathi.")
+        container.repository.add_chat_message(chat["id"], "user", "Which size should I choose?")
+        container.repository.add_chat_message(chat["id"], "assistant", "Welcome to Vishwas Saathi.")
 
         msgs = container.repository.list_chat_messages(chat["id"])
         assert len(msgs) == 2
@@ -396,8 +399,8 @@ def test_vishwas_saathi_chat_persistence():
 
 
 def test_audio_requests_follow_the_explicit_ui_flow():
-    from kavach_saathi.orchestration.graph import AgentGraphs
     from kavach_saathi.models import ChatMessageSend
+    from kavach_saathi.orchestration.graph import AgentGraphs
 
     size_routed = AgentGraphs._voice_intent(
         {"request": {"audio_key": "uploads/voice/question.webm", "voice_flow": "size"}}

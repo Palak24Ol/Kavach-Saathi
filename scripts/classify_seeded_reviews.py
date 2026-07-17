@@ -45,7 +45,7 @@ def main() -> None:
                 pairs.append((image, f"{product.title}, {product.category}"))
 
             scores = classifier.clip_batch_similarity(pairs)
-            for review, clip_score in zip(batch, scores):
+            for review, clip_score in zip(batch, scores, strict=True):
                 if clip_score < _CLIP_RELEVANT_THRESHOLD:
                     review.is_hidden_by_agent = True
                     review.hide_reason = (

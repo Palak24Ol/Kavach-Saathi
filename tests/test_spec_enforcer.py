@@ -119,7 +119,12 @@ def test_missing_gsm_and_wash_care_triggers_pending_seller_input(client) -> None
         # (with a null value, i.e. "the seller was asked but didn't have it") for the
         # missing-field path to consider them, distinct from a category where they're
         # simply not tracked at all.
-        product.spec_json = {"fabric": "60% Cotton, 40% Viscose", "color_hex": "#800000", "gsm": None, "wash_care": None}
+        product.spec_json = {
+            "fabric": "60% Cotton, 40% Viscose",
+            "color_hex": "#800000",
+            "gsm": None,
+            "wash_care": None,
+        }
         session.commit()
 
     extracted = ExtractedSpec(label_visible=False)

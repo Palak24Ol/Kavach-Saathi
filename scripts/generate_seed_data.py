@@ -31,8 +31,8 @@ from kavach_saathi.db.models import (
     SellerTrustScoreRecord,
     SupportInteraction,
     User,
-    WorkflowRun,
     WishlistItem,
+    WorkflowRun,
 )
 from kavach_saathi.digipin import encode
 from kavach_saathi.order_status import OrderStatus
@@ -959,7 +959,9 @@ def seed_database() -> dict[str, int]:
                     product_id=product["id"], key=key, label=key.replace("_", " ").title(),
                     value_json=value, value_type="number" if isinstance(value, (int, float)) else "text",
                     unit="GSM" if key == "gsm" else ("cm" if key.endswith("_cm") else None),
-                    comparison_group="fabric" if key in {"fabric", "gsm"} else ("color" if "color" in key else "general"),
+                    comparison_group=(
+                        "fabric" if key in {"fabric", "gsm"} else ("color" if "color" in key else "general")
+                    ),
                     comparable=True, source="seller_form", verified=key in product["label_backed_fields"],
                 ))
             session.add(
