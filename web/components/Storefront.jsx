@@ -351,7 +351,7 @@ function ProductPageView({ product, busy, cart, cartBusy, onBack, onClose, onAdd
           {!!product.badges?.length && <div className="product-badges">{product.badges.map((badge) => <span key={badge}><Check size={11} /> {badge}</span>)}</div>}
           <div className="trust-banner"><ShieldCheck size={19} /><div><strong>Verified product details</strong><p>Catalogue imagery and specifications matched to verified label details.</p></div></div>
 
-          {!!sizes.length && <div className="size-section"><div className="section-label"><strong>Select size</strong><button type="button" onClick={onSize} disabled={busy}>{busy ? <LoaderCircle className="spin" size={13} /> : <Sparkles size={13} />} Ask Size Saathi</button></div><div className="size-row">{sizes.map((item) => <button className={selectedSize === item ? "selected" : ""} type="button" key={item} onClick={() => setSize(item)}>{item}</button>)}</div>{!selectedSize && <small>Choose a size, or ask Size Saathi for evidence-based guidance. No size is preselected.</small>}{sizeSaathi && <div className="agent-answer size-saathi-answer">{sizeSaathi.size ? <strong>{sizeSaathi.source === "product_popularity" ? "Popular-size fallback" : "Size Saathi recommendation"}: {sizeSaathi.size}</strong> : <strong>More information needed</strong>}{sizeSaathi.message && <span>{sizeSaathi.message}</span>}</div>}</div>}
+          {!!sizes.length && <div className="size-section"><div className="section-label"><strong>Select size</strong><button type="button" onClick={onSize} disabled={busy}>{busy ? <LoaderCircle className="spin" size={13} /> : <Sparkles size={13} />} Ask Size Saathi</button></div><div className="size-row">{sizes.map((item) => <button className={selectedSize === item ? "selected" : ""} type="button" key={item} onClick={() => setSize(item)}>{item}</button>)}</div>{!selectedSize && <small>Choose a size, or ask Size Saathi for evidence-based guidance. No size is preselected.</small>}{sizeSaathi && <div className="agent-answer size-saathi-answer">{sizeSaathi.size ? <strong>{sizeSaathi.source === "product_popularity" ? "Popular-size fallback" : "Size Saathi recommendation"}: {sizeSaathi.size}</strong> : <strong>More information needed</strong>}{sizeSaathi.message && <span>{sizeSaathi.message}</span>}{sizeSaathi.audioUrl && <audio controls preload="none" src={sizeSaathi.audioUrl} style={{ width: "100%", marginTop: 8 }}>Your browser does not support audio playback.</audio>}</div>}</div>}
 
           <section className="trust-banner" aria-label="Vishwas Saathi">
             <MessageCircle size={19} />
@@ -2284,11 +2284,13 @@ export default function Storefront({ initialProductId = null }) {
     if (!selected) return;
     requireAuth(async (buyerId) => {
       setSizeSaathi(null);
-      const payload = await execute("Size Saathi is checking purchase and fit history...", () => post("/size/recommend", { buyer_id: buyerId, product_id: selected.id }));
+      const language = auth?.user?.preferred_language || "hi";
+      const payload = await execute("Size Saathi is checking purchase and fit history...", () => post("/voice/query", { buyer_id: buyerId, product_id: selected.id, text: "Mujhe kaunsa size lena chahiye?", language, voice_flow: "size", synthesize_audio: true }));
       const sizeResult = payload.results.size_translator;
+      const voiceResult = payload.results.voice_qa;
       const recommendation = sizeResult?.data?.recommended_size;
-      const message = sizeResult?.user_message?.en || sizeResult?.summary || "";
-      setSizeSaathi({ size: recommendation || null, source: sizeResult?.data?.source, message });
+      const message = voiceResult?.user_message?.[language] || voiceResult?.summary || sizeResult?.user_message?.en || sizeResult?.summary || "";
+      setSizeSaathi({ size: recommendation || null, source: sizeResult?.data?.source, message, audioKey: voiceResult?.data?.audio_key || null });
       if (recommendation) setToast(`Size Saathi recommends ${recommendation}`);
     });
   }
@@ -2309,7 +2311,7 @@ export default function Storefront({ initialProductId = null }) {
     const buyerId = auth?.user?.id || "B-001";
     const language = auth?.user?.preferred_language || "hi";
     try {
-      const payload = await execute("Retrieving verified details...", () => post("/voice/query", { buyer_id: buyerId, product_id: selected.id, text: question, language }));
+      const payload = await execute("Retrieving verified details...", () => post("/voice/query", { buyer_id: buyerId, product_id: selected.id, text: question, language, synthesize_audio: true }));
       const result = payload.results?.voice_qa;
       setAgentAnswer(result?.user_message?.[language] || result?.summary || "");
       setVoiceAudioKey(result?.data?.audio_key || null);
@@ -2328,7 +2330,7 @@ export default function Storefront({ initialProductId = null }) {
       const extension = blob.type.includes("webm") ? "webm" : blob.type.includes("ogg") ? "ogg" : "wav";
       const presign = await post("/uploads/presign", { kind: "voice", filename: `question.${extension}`, content_type: blob.type || "audio/webm" });
       await fetch(presign.upload_url, { method: "PUT", body: blob, headers: { "Content-Type": blob.type || "audio/webm" } });
-      const payload = await execute("Transcribing and processing your question...", () => post("/voice/query", { buyer_id: buyerId, product_id: selected.id, audio_key: presign.object_key, language }));
+      const payload = await execute("Transcribing and processing your question...", () => post("/voice/query", { buyer_id: buyerId, product_id: selected.id, audio_key: presign.object_key, language, synthesize_audio: true }));
       const result = payload.results?.voice_qa;
       setAgentAnswer(result?.user_message?.[language] || result?.summary || "");
       setVoiceAudioKey(result?.data?.audio_key || null);

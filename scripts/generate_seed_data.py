@@ -13,6 +13,8 @@ from kavach_saathi.db.models import (
     AgentLog,
     BuyerTrustSignal,
     CartItem,
+    ChatConversation,
+    ChatMessage,
     EvalFixture,
     Order,
     OrderItem,
@@ -814,6 +816,8 @@ def reset_database() -> None:
     with SessionLocal() as session:
         for model in (
             EvalFixture,
+            ChatMessage,
+            ChatConversation,
             AgentLog,
             CartItem,
             WishlistItem,
