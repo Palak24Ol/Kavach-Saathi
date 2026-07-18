@@ -182,3 +182,16 @@ export async function login(identifier, password) {
 export function logout() {
   saveAuthSession(null);
 }
+
+export async function verifyEmailOtp(otp) {
+  const user = await post("/auth/verify-email", { otp });
+  // Merge the now-verified user back into the stored session so the UI reflects
+  // it immediately without a re-login.
+  const session = loadAuthSession();
+  if (session) saveAuthSession({ ...session, user });
+  return user;
+}
+
+export const resendEmailOtp = () => post("/auth/verify-email/resend", {});
+export const confirmOrderEmailSend = (orderId) => post(`/orders/${orderId}/confirm/email/send`, {});
+export const confirmOrderEmailVerify = (orderId, otp) => post(`/orders/${orderId}/confirm/email/verify`, { otp });

@@ -4,7 +4,7 @@ import hashlib
 import io
 import logging
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -17,6 +17,8 @@ from kavach_saathi.db.base import get_session
 from kavach_saathi.db.models import Address, Order, OrderItem, OrderStatusHistory, Payment, ReturnRecord, User
 from kavach_saathi.media_storage import read_image_bytes
 from kavach_saathi.order_status import OrderStatus
+from kavach_saathi.providers import otp_core
+from kavach_saathi.providers.email_integration import EmailIntegrationClient
 from kavach_saathi.providers.twilio_integration import TwilioIntegrationClient
 from kavach_saathi.redis_client import get_redis
 
@@ -30,6 +32,10 @@ class RescheduleRequest(BaseModel):
 
 class ConfirmDeliveryRequest(BaseModel):
     otp_code: str = Field(..., min_length=4, max_length=10)
+
+
+class OtpSendChannelRequest(BaseModel):
+    channel: Literal["whatsapp", "email"] = "whatsapp"
 
 
 class ReturnVerifyRequest(BaseModel):
@@ -220,6 +226,7 @@ async def reschedule_delivery(
 async def send_delivery_otp(
     order_id: str,
     user: Annotated[User, Depends(_require_delivery_boy)],
+    payload: OtpSendChannelRequest = OtpSendChannelRequest(),
     cfg: Settings = Depends(get_settings),
     db: Session = Depends(get_session),
 ):
@@ -233,20 +240,28 @@ async def send_delivery_otp(
     }:
         raise HTTPException(status_code=404, detail="Deliverable order not found")
 
-    addr = db.get(Address, order.address_id)
-    if not addr or not addr.phone:
-        raise HTTPException(status_code=400, detail="Buyer phone number not found in delivery address")
-
-    twilio_integration = TwilioIntegrationClient(cfg)
     try:
-        twilio_integration.send_programmable_whatsapp_otp(
-            addr.phone,
-            purpose="delivery",
-            reference_id=order.id,
-        )
+        if payload.channel == "email":
+            buyer = db.get(User, order.buyer_id)
+            if not buyer or not buyer.email:
+                raise HTTPException(status_code=400, detail="Buyer email not found on this account")
+            EmailIntegrationClient(cfg).send_otp_email(buyer.email, purpose="delivery", reference_id=order.id)
+            sent_via = "email"
+        else:
+            addr = db.get(Address, order.address_id)
+            if not addr or not addr.phone:
+                raise HTTPException(status_code=400, detail="Buyer phone number not found in delivery address")
+            TwilioIntegrationClient(cfg).send_programmable_whatsapp_otp(
+                addr.phone, purpose="delivery", reference_id=order.id
+            )
+            sent_via = "WhatsApp"
         order.delivery_boy_id = user.id
         db.commit()
-        return {"message": "OTP sent via WhatsApp successfully"}
+        return {"message": f"OTP sent via {sent_via} successfully"}
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to send OTP: {exc}") from exc
 
@@ -311,15 +326,8 @@ async def complete_delivery(
     items = db.execute(select(OrderItem).where(OrderItem.order_id == order_id)).scalars().all()
     if not items or any(not item.delivery_front_image or not item.delivery_back_image for item in items):
         raise HTTPException(status_code=400, detail="Front and back evidence is required for every order item")
-    address = db.get(Address, order.address_id)
-    phone = (order.address_snapshot or {}).get("phone") or (address.phone if address else None)
-    if not phone or not TwilioIntegrationClient(cfg).check_programmable_whatsapp_otp(
-        phone,
-        payload.otp_code,
-        purpose="delivery",
-        reference_id=order.id,
-    ):
-        raise HTTPException(status_code=400, detail="Buyer WhatsApp OTP was not verified")
+    if not otp_core.verify_otp(get_redis(), cfg, purpose="delivery", reference_id=order.id, code=payload.otp_code):
+        raise HTTPException(status_code=400, detail="Buyer OTP was not verified")
     verified_at = datetime.now(UTC).isoformat()
     for item in items:
         item.delivery_metadata = {**(item.delivery_metadata or {}), "otp_verified_at": verified_at}
@@ -505,6 +513,7 @@ async def verify_return_pickup(
 async def send_return_otp(
     return_id: str,
     user: Annotated[User, Depends(_require_delivery_boy)],
+    payload: OtpSendChannelRequest = OtpSendChannelRequest(),
     cfg: Settings = Depends(get_settings),
     db: Session = Depends(get_session),
 ):
@@ -516,22 +525,28 @@ async def send_return_otp(
         raise HTTPException(status_code=400, detail="Cannot send return OTP before successful visual verification.")
 
     order = db.get(Order, ret.order_id)
-    addr = db.get(Address, order.address_id) if order and order.address_id else None
-    phone = (order.address_snapshot or {}).get("phone") if order else None
-    phone = phone or (addr.phone if addr else None)
-    if not phone:
-        raise HTTPException(status_code=400, detail="Buyer phone number not found")
-
-    twilio_integration = TwilioIntegrationClient(cfg)
     try:
-        twilio_integration.send_programmable_whatsapp_otp(
-            phone,
-            purpose="return",
-            reference_id=ret.id,
-        )
+        if payload.channel == "email":
+            buyer = db.get(User, order.buyer_id) if order else None
+            if not buyer or not buyer.email:
+                raise HTTPException(status_code=400, detail="Buyer email not found on this account")
+            EmailIntegrationClient(cfg).send_otp_email(buyer.email, purpose="return", reference_id=ret.id)
+            sent_via = "email"
+        else:
+            addr = db.get(Address, order.address_id) if order and order.address_id else None
+            phone = (order.address_snapshot or {}).get("phone") if order else None
+            phone = phone or (addr.phone if addr else None)
+            if not phone:
+                raise HTTPException(status_code=400, detail="Buyer phone number not found")
+            TwilioIntegrationClient(cfg).send_programmable_whatsapp_otp(phone, purpose="return", reference_id=ret.id)
+            sent_via = "WhatsApp"
         ret.delivery_boy_id = user.id
         db.commit()
-        return {"message": "OTP sent via WhatsApp successfully"}
+        return {"message": f"OTP sent via {sent_via} successfully"}
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to send OTP: {exc}") from exc
 
@@ -562,17 +577,9 @@ async def complete_return_inspection(
         raise HTTPException(status_code=400, detail="Buyer image evidence has not passed comparison")
     if not _claim_once(f"idempotency:return-complete:{return_id}:{payload.idempotency_key}"):
         raise HTTPException(status_code=409, detail="Return completion was already submitted")
+    if not otp_core.verify_otp(get_redis(), cfg, purpose="return", reference_id=ret.id, code=payload.otp_code):
+        raise HTTPException(status_code=400, detail="Buyer OTP was not verified")
     order = db.get(Order, ret.order_id)
-    address = db.get(Address, order.address_id) if order else None
-    phone = (order.address_snapshot or {}).get("phone") if order else None
-    phone = phone or (address.phone if address else None)
-    if not phone or not TwilioIntegrationClient(cfg).check_programmable_whatsapp_otp(
-        phone,
-        payload.otp_code,
-        purpose="return",
-        reference_id=ret.id,
-    ):
-        raise HTTPException(status_code=400, detail="Buyer WhatsApp OTP was not verified")
 
     ret.inspection_checklist = {
         **payload.inspection_checklist,

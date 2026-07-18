@@ -46,6 +46,7 @@ from kavach_saathi.models import (
     CartItemAdd,
     CartItemUpdate,
     Coordinates,
+    EmailOtpVerifyRequest,
     FitFeedbackRequest,
     OrderCreateRequest,
     OtpSendRequest,
@@ -57,6 +58,8 @@ from kavach_saathi.models import (
     WorkflowType,
 )
 from kavach_saathi.order_status import OrderStatus
+from kavach_saathi.providers import otp_core
+from kavach_saathi.providers.email_integration import EmailIntegrationClient
 from kavach_saathi.providers.google_maps import GoogleMapsUnavailable
 from kavach_saathi.providers.razorpay_provider import RazorpayClient, RazorpayUnavailable
 from kavach_saathi.providers.return_vision import ReturnVisionVerifier
@@ -662,6 +665,64 @@ async def payment_status(
         "order_status": order.status,
         "payment_status": payment.status if payment else "not_required",
         "amount": order.total_amount,
+    }
+
+
+@router.post("/orders/{order_id}/confirm/email/send")
+async def send_order_confirm_email_otp(
+    order_id: str,
+    user: Annotated[User, Depends(_require_buyer)],
+    cfg: Settings = Depends(get_settings),
+    session: Session = Depends(get_session),
+):
+    order = session.get(Order, order_id)
+    if not order or order.buyer_id != user.id:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.status != OrderStatus.AWAITING_BUYER_CONFIRMATION:
+        raise HTTPException(status_code=409, detail="This order is not awaiting confirmation")
+    if not user.email:
+        raise HTTPException(status_code=400, detail="This account has no email on file")
+    try:
+        EmailIntegrationClient(cfg).send_otp_email(user.email, purpose="order_confirm", reference_id=order.id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {"message": "OTP sent via email successfully"}
+
+
+@router.post("/orders/{order_id}/confirm/email/verify")
+async def verify_order_confirm_email_otp(
+    order_id: str,
+    payload: EmailOtpVerifyRequest,
+    user: Annotated[User, Depends(_require_buyer)],
+    cfg: Settings = Depends(get_settings),
+    session: Session = Depends(get_session),
+):
+    order = session.get(Order, order_id)
+    if not order or order.buyer_id != user.id:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.status != OrderStatus.AWAITING_BUYER_CONFIRMATION:
+        raise HTTPException(status_code=409, detail="This order is not awaiting confirmation")
+    if not otp_core.verify_otp(get_redis(), cfg, purpose="order_confirm", reference_id=order.id, code=payload.otp):
+        raise HTTPException(status_code=400, detail="Incorrect or expired verification code")
+
+    # Same transition app.py's WhatsApp "order_confirm_yes" webhook branch makes,
+    # immediately followed by the "delivery_date_yes" auto-accept -- email has no
+    # interactive delivery-date negotiation (no tappable buttons), so the computed
+    # date is accepted outright rather than asking the buyer to confirm it again.
+    today = order.created_at.date() if order.created_at else datetime.now(UTC).date()
+    order.status = OrderStatus.CONFIRMED
+    if order.promised_delivery_date is None:
+        offset = 3 + (int.from_bytes(order.id.encode("utf-8"), "little") % 2)
+        order.promised_delivery_date = datetime.combine(today + timedelta(days=offset), datetime.min.time())
+    session.add(OrderStatusHistory(order_id=order.id, status=OrderStatus.CONFIRMED, actor="buyer"))
+    order.status = OrderStatus.DELIVERY_SCHEDULED
+    order.whatsapp_workflow_state = "delivery_scheduled"
+    session.add(OrderStatusHistory(order_id=order.id, status=OrderStatus.DELIVERY_SCHEDULED, actor="buyer"))
+    session.commit()
+    return {
+        "message": "Order confirmed",
+        "status": order.status,
+        "promised_delivery_date": order.promised_delivery_date,
     }
 
 

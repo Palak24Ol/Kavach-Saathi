@@ -47,6 +47,8 @@ import {
   addToCart as apiAddToCart,
   addWishlist,
   assetUrl,
+  confirmOrderEmailSend,
+  confirmOrderEmailVerify,
   createOrder,
   createReturnRequest,
   createReview,
@@ -65,8 +67,10 @@ import {
   removeCartItem,
   removeWishlist,
   request,
+  resendEmailOtp,
   signup,
   updateCartItem,
+  verifyEmailOtp,
 } from "@/lib/api";
 
 const LANGUAGE_OPTIONS = [
@@ -553,9 +557,49 @@ function CartDrawer({ items, open, busyItem, onClose, onUpdate, onRemove, onChec
   );
 }
 
-function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onOpenProduct, onRemoveWishlist, onStartReturn, onStartReview, onViewReturn, onSubmitFitFeedback, fullScreen = false }) {
+function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onOpenProduct, onRemoveWishlist, onStartReturn, onStartReview, onViewReturn, onSubmitFitFeedback, onSendOrderEmailOtp, onVerifyOrderEmailOtp, fullScreen = false }) {
   const title = type === "orders" ? "My Orders" : type === "wishlist" ? "My Wishlist" : "My Returns";
   const items = type === "orders" ? orders : type === "wishlist" ? wishlist : returns;
+
+  const [emailOtpOrderId, setEmailOtpOrderId] = useState(null);
+  const [emailOtpSent, setEmailOtpSent] = useState(false);
+  const [emailOtpValue, setEmailOtpValue] = useState("");
+  const [emailOtpBusy, setEmailOtpBusy] = useState(false);
+  const [emailOtpError, setEmailOtpError] = useState("");
+
+  function resetEmailOtp() {
+    setEmailOtpOrderId(null);
+    setEmailOtpSent(false);
+    setEmailOtpValue("");
+    setEmailOtpBusy(false);
+    setEmailOtpError("");
+  }
+
+  async function handleSendOrderEmailOtp(orderId) {
+    setEmailOtpBusy(true);
+    setEmailOtpError("");
+    try {
+      await onSendOrderEmailOtp(orderId);
+      setEmailOtpSent(true);
+    } catch (reason) {
+      setEmailOtpError(reason.message || "Could not send the code");
+    } finally {
+      setEmailOtpBusy(false);
+    }
+  }
+
+  async function handleVerifyOrderEmailOtp(orderId) {
+    setEmailOtpBusy(true);
+    setEmailOtpError("");
+    try {
+      await onVerifyOrderEmailOtp(orderId, emailOtpValue);
+      resetEmailOtp();
+    } catch (reason) {
+      setEmailOtpError(reason.message || "Incorrect or expired code");
+    } finally {
+      setEmailOtpBusy(false);
+    }
+  }
 
   function statusColor(s) {
     if (["DELIVERED", "RETURN_APPROVED", "CLOSED"].includes(s)) return "#16a34a";
@@ -574,17 +618,25 @@ function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onO
     if (state === "awaiting_order_confirmation" || state === "ownership_prompt_sent" || order.status === "AWAITING_BUYER_CONFIRMATION") return "Please confirm on WhatsApp that you placed this order.";
     if (state === "awaiting_delivery_date_confirmation") return `Order confirmed. Please confirm the proposed delivery date${order.promised_delivery_date ? ` (${new Date(order.promised_delivery_date).toLocaleDateString("en-IN")})` : ""} on WhatsApp.`;
     if (state === "awaiting_reschedule_choice") return "Choose your preferred rescheduled delivery date on WhatsApp.";
-    if (state === "delivery_scheduled" || order.status === "DELIVERY_SCHEDULED") return `Confirmed on WhatsApp. Your order will be delivered${order.promised_delivery_date ? ` by ${new Date(order.promised_delivery_date).toLocaleDateString("en-IN")}` : " soon"}.`;
+    if (state === "delivery_scheduled" || order.status === "DELIVERY_SCHEDULED") return `Order confirmed. Your order will be delivered${order.promised_delivery_date ? ` by ${new Date(order.promised_delivery_date).toLocaleDateString("en-IN")}` : " soon"}.`;
     if (state === "awaiting_cancellation_confirmation") return "Please confirm on WhatsApp whether you want to keep or cancel this order.";
     return "We will update you as this order moves toward delivery.";
   }
 
   function orderStatusLabel(order) {
     const state = order.whatsapp_workflow_state;
-    if (state === "awaiting_order_confirmation" || state === "ownership_prompt_sent") return "WHATSAPP CONFIRMATION PENDING";
-    if (state === "awaiting_delivery_date_confirmation") return "DELIVERY DATE CONFIRMATION PENDING";
-    if (state === "awaiting_reschedule_choice") return "RESCHEDULE DATE PENDING";
-    if (state === "delivery_scheduled") return "DELIVERY SCHEDULED";
+    // whatsapp_workflow_state only reflects the pre-delivery confirmation/scheduling
+    // steps and is never cleared once delivery actually starts moving (evidence
+    // upload, OTP completion, etc. only touch order.status) -- without this guard,
+    // an order that's long since DELIVERED would still show a stale "DELIVERY
+    // SCHEDULED" badge here.
+    const stillPreDelivery = ["AWAITING_BUYER_CONFIRMATION", "CONFIRMED", "DELIVERY_SCHEDULED"].includes(order.status);
+    if (stillPreDelivery) {
+      if (state === "awaiting_order_confirmation" || state === "ownership_prompt_sent") return "WHATSAPP CONFIRMATION PENDING";
+      if (state === "awaiting_delivery_date_confirmation") return "DELIVERY DATE CONFIRMATION PENDING";
+      if (state === "awaiting_reschedule_choice") return "RESCHEDULE DATE PENDING";
+      if (state === "delivery_scheduled") return "DELIVERY SCHEDULED";
+    }
     return (order.status || "PROCESSING").replaceAll("_", " ");
   }
 
@@ -672,6 +724,59 @@ function AccountDataDrawer({ type, open, orders, wishlist, returns, onClose, onO
                 <div style={{ display: "flex", flexDirection: "column", gap: "5px", background: "#eff6ff", border: "1px solid #bfdbfe", borderRadius: "6px", padding: "8px 10px" }}>
                   <strong style={{ color: "#1d4ed8", fontSize: "12px" }}>{confirmationMessage(order)}</strong>
                   <small style={{ color: "#64748b", fontSize: "11px" }}>Return and review options become available after delivery.</small>
+                  {order.status === "AWAITING_BUYER_CONFIRMATION" && (
+                    emailOtpOrderId === order.id ? (
+                      <div style={{ display: "flex", flexDirection: "column", gap: "6px", marginTop: "4px" }}>
+                        {!emailOtpSent ? (
+                          <button
+                            type="button"
+                            className="secondary-cta compact"
+                            style={{ fontSize: "12px" }}
+                            disabled={emailOtpBusy}
+                            onClick={() => handleSendOrderEmailOtp(order.id)}
+                          >
+                            {emailOtpBusy ? <LoaderCircle className="spin" size={13} /> : null} Send code to my email
+                          </button>
+                        ) : (
+                          <>
+                            <input
+                              value={emailOtpValue}
+                              onChange={(event) => setEmailOtpValue(event.target.value)}
+                              inputMode="numeric"
+                              placeholder="Enter the 6-digit code"
+                              aria-label="Order confirmation code"
+                              style={{ fontSize: "12px", padding: "6px 8px" }}
+                            />
+                            <button
+                              type="button"
+                              className="secondary-cta compact"
+                              style={{ fontSize: "12px" }}
+                              disabled={emailOtpBusy || !emailOtpValue}
+                              onClick={() => handleVerifyOrderEmailOtp(order.id)}
+                            >
+                              {emailOtpBusy ? <LoaderCircle className="spin" size={13} /> : null} Verify code
+                            </button>
+                          </>
+                        )}
+                        {emailOtpError && <small className="field-error">{emailOtpError}</small>}
+                        <button
+                          type="button"
+                          style={{ background: "none", border: "none", color: "#64748b", fontSize: "11px", cursor: "pointer", padding: 0, textAlign: "left" }}
+                          onClick={resetEmailOtp}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        style={{ background: "none", border: "none", color: "#1d4ed8", fontSize: "11px", cursor: "pointer", padding: 0, textAlign: "left", textDecoration: "underline" }}
+                        onClick={() => setEmailOtpOrderId(order.id)}
+                      >
+                        Or confirm via email OTP instead
+                      </button>
+                    )
+                  )}
                 </div>
               )}
             </article>
@@ -1781,6 +1886,11 @@ function AuthModal({ open, onClose, onAuthenticated }) {
   const [businessName, setBusinessName] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [pendingSession, setPendingSession] = useState(null);
+  const [otp, setOtp] = useState("");
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyError, setVerifyError] = useState("");
+  const [resendNotice, setResendNotice] = useState("");
 
   if (!open) return null;
 
@@ -1799,12 +1909,86 @@ function AuthModal({ open, onClose, onAuthenticated }) {
           preferred_language: preferredLanguage,
           ...(role === "seller" ? { business_name: businessName } : {}),
         });
-      onAuthenticated(session);
+      if (mode === "signup" && session.email_verification_sent) {
+        setPendingSession(session);
+      } else {
+        onAuthenticated(session);
+      }
     } catch (reason) {
       setError(reason.message || "That didn't work — please try again");
     } finally {
       setBusy(false);
     }
+  }
+
+  async function handleVerifyOtp(event) {
+    event.preventDefault();
+    setVerifyBusy(true);
+    setVerifyError("");
+    try {
+      const user = await verifyEmailOtp(otp);
+      onAuthenticated({ ...pendingSession, user });
+    } catch (reason) {
+      setVerifyError(reason.message || "Incorrect or expired code");
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
+
+  async function handleResend() {
+    setVerifyError("");
+    setResendNotice("");
+    try {
+      await resendEmailOtp();
+      setResendNotice("A new code was sent to your email.");
+    } catch (reason) {
+      setVerifyError(reason.message || "Could not resend the code");
+    }
+  }
+
+  if (pendingSession) {
+    return (
+      <div className="drawer-layer open" aria-hidden={!open}>
+        <button className="drawer-scrim" type="button" onClick={onClose} aria-label="Close sign in" />
+        <aside className="side-drawer auth-drawer" role="dialog" aria-modal="true" aria-label="Verify your email">
+          <div className="side-heading">
+            <div><p>ALMOST THERE</p><h2>Verify your email</h2></div>
+            <button type="button" onClick={onClose} aria-label="Close"><X size={20} /></button>
+          </div>
+          <form className="auth-form" onSubmit={handleVerifyOtp}>
+            <p style={{ fontSize: "13px", color: "#64748b", margin: 0 }}>
+              We emailed a 6-digit code to {pendingSession.user?.email}. Enter it below to verify your account.
+            </p>
+            <label>Verification code
+              <input
+                value={otp}
+                onChange={(event) => setOtp(event.target.value)}
+                inputMode="numeric"
+                placeholder="123456"
+                maxLength={10}
+                required
+                autoFocus
+              />
+            </label>
+            {verifyError && <p className="auth-error">{verifyError}</p>}
+            {resendNotice && <p style={{ fontSize: "12px", color: "#16a34a", margin: 0 }}>{resendNotice}</p>}
+            <button className="primary-cta wide" type="submit" disabled={verifyBusy}>
+              {verifyBusy ? <LoaderCircle className="spin" size={17} /> : null} Verify
+            </button>
+            <button type="button" className="secondary-cta wide" onClick={handleResend} disabled={verifyBusy}>
+              Resend code
+            </button>
+            <button
+              type="button"
+              style={{ background: "none", border: "none", color: "#94a3b8", fontSize: "12px", cursor: "pointer" }}
+              onClick={() => onAuthenticated(pendingSession)}
+            >
+              Skip for now
+            </button>
+          </form>
+        </aside>
+      </div>
+    );
   }
 
   return (
@@ -2121,6 +2305,18 @@ export default function Storefront({ initialProductId = null }) {
       await refreshAccountData();
       setToast("Thanks! Size Saathi will use this for future recommendations.");
     } catch (reason) { setToast(reason.message || "Could not save fit feedback"); }
+  }
+
+  // Unlike submitFitFeedback, these don't swallow errors -- AccountDataDrawer's own
+  // inline OTP form catches them to show a local field error instead of a toast.
+  async function sendOrderEmailOtp(orderId) {
+    await confirmOrderEmailSend(orderId);
+  }
+
+  async function verifyOrderEmailOtp(orderId, otp) {
+    await confirmOrderEmailVerify(orderId, otp);
+    await refreshAccountData();
+    setToast("Order confirmed!");
   }
 
 
@@ -2484,7 +2680,7 @@ export default function Storefront({ initialProductId = null }) {
         <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} />
         <CheckoutDrawer open={drawer === "checkout"} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => setDrawer("orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => setDrawer("addresses")} buyerName={auth?.user?.name} />
         <AddressManagerDrawer open={drawer === "addresses"} onClose={() => { setDrawer(null); refreshAccountData(); }} buyerId={auth?.user?.id} />
-        <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} />
+        <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSendOrderEmailOtp={sendOrderEmailOtp} onVerifyOrderEmailOtp={verifyOrderEmailOtp} />
         <ReturnVerificationDrawer open={drawer === "return-verify"} returnId={selectedReturnId} returns={returns} orders={orders} onClose={() => { setDrawer(null); refreshAccountData(); }} onRefreshData={refreshAccountData} />
         <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
         <ReviewSummaryDialog data={reviewSummary} onClose={() => setReviewSummary(null)} />
@@ -2540,11 +2736,11 @@ export default function Storefront({ initialProductId = null }) {
         {pathname === "/account/cart" ? (
           <CartDrawer items={cart} open={true} busyItem={cartBusy} onClose={() => router.push("/")} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} fullScreen={true} />
         ) : pathname === "/account/orders" ? (
-          <AccountDataDrawer type="orders" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} fullScreen={true} />
+          <AccountDataDrawer type="orders" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSendOrderEmailOtp={sendOrderEmailOtp} onVerifyOrderEmailOtp={verifyOrderEmailOtp} fullScreen={true} />
         ) : pathname === "/account/returns" ? (
-          <AccountDataDrawer type="returns" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} fullScreen={true} />
+          <AccountDataDrawer type="returns" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSendOrderEmailOtp={sendOrderEmailOtp} onVerifyOrderEmailOtp={verifyOrderEmailOtp} fullScreen={true} />
         ) : pathname === "/account/wishlist" ? (
-          <AccountDataDrawer type="wishlist" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} fullScreen={true} />
+          <AccountDataDrawer type="wishlist" open={true} orders={orders} wishlist={wishlist} returns={returns} onClose={() => router.push("/")} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSendOrderEmailOtp={sendOrderEmailOtp} onVerifyOrderEmailOtp={verifyOrderEmailOtp} fullScreen={true} />
         ) : pathname === "/account/addresses" ? (
           <AddressManagerDrawer open={true} onClose={() => router.push("/")} buyerId={auth?.user?.id} fullScreen={true} />
         ) : (
@@ -2589,7 +2785,7 @@ export default function Storefront({ initialProductId = null }) {
       {!isAccountPage && <CartDrawer items={cart} open={drawer === "cart"} busyItem={cartBusy} onClose={() => setDrawer(null)} onUpdate={updateCartQuantity} onRemove={removeFromCart} onCheckout={() => requireAuth(() => { setDrawer("checkout"); setCheckoutStep("address"); })} />}
       <CheckoutDrawer open={drawer === "checkout"} busy={busy} step={checkoutStep} orderId={lastOrderId} orderSummary={lastOrderSummary} onClose={() => setDrawer(null)} onGoOrders={() => router.push("/account/orders")} onConfirm={confirmOrder} onConfirmPrepaid={confirmOrderPrepaid} addresses={addresses} onManageAddresses={() => router.push("/account/addresses")} buyerName={auth?.user?.name} />
       {!isAccountPage && <AddressManagerDrawer open={drawer === "addresses"} onClose={() => { setDrawer(null); refreshAccountData(); }} buyerId={auth?.user?.id} />}
-      {!isAccountPage && <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} />}
+      {!isAccountPage && <AccountDataDrawer type={drawer} open={["orders", "wishlist", "returns"].includes(drawer)} orders={orders} wishlist={wishlist} returns={returns} onClose={() => setDrawer(null)} onOpenProduct={(productId) => router.push(`/products/${productId}`)} onRemoveWishlist={(productId) => toggleWishlist({ id: productId })} onStartReturn={startReturn} onStartReview={startReview} onViewReturn={handleViewReturn} onSubmitFitFeedback={submitFitFeedback} onSendOrderEmailOtp={sendOrderEmailOtp} onVerifyOrderEmailOtp={verifyOrderEmailOtp} />}
       <ReturnVerificationDrawer open={drawer === "return-verify"} returnId={selectedReturnId} returns={returns} orders={orders} onClose={() => { setDrawer(null); refreshAccountData(); }} onRefreshData={refreshAccountData} />
       <AuthModal open={authModalOpen} onClose={() => { setAuthModalOpen(false); setPendingAfterAuth(null); }} onAuthenticated={handleAuthenticated} />
       <ReviewSummaryDialog data={reviewSummary} onClose={() => setReviewSummary(null)} />

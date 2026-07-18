@@ -72,7 +72,7 @@ def test_programmable_whatsapp_otp_uses_sandbox_and_redis():
         patch.object(integration.settings, "twilio_whatsapp_from", "whatsapp:+14155238886"),
         patch.object(integration, "_client", return_value=twilio),
         patch("kavach_saathi.redis_client.get_redis", return_value=redis),
-        patch("kavach_saathi.providers.twilio_integration.secrets.randbelow", return_value=23456),
+        patch("kavach_saathi.providers.otp_core.secrets.randbelow", return_value=23456),
     ):
         sid = integration.send_programmable_whatsapp_otp(
             "+919748572321",

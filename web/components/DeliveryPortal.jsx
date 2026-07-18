@@ -38,6 +38,7 @@ export default function DeliveryPortal() {
   const [frontImage, setFrontImage] = useState(null);
   const [backImage, setBackImage] = useState(null);
   const [otp, setOtp] = useState("");
+  const [otpChannel, setOtpChannel] = useState("whatsapp");
   const [checks, setChecks] = useState({ matches_images: false, seal_and_tags_present: false, undamaged: false });
   const [busy, setBusy] = useState(false);
 
@@ -81,7 +82,7 @@ export default function DeliveryPortal() {
       const path = workflow.type === "delivery"
         ? `/delivery/deliveries/${workflow.order_id}/otp/send`
         : `/delivery/returns/${workflow.return_id}/otp/send`;
-      await post(path, { idempotency_key: crypto.randomUUID() });
+      await post(path, { channel: otpChannel, idempotency_key: crypto.randomUUID() });
       setOtpSent(true);
     } catch (reason) { setError(reason.message); } finally { setBusy(false); }
   }
@@ -144,8 +145,13 @@ export default function DeliveryPortal() {
       )}
 
       {workflow && <div className="delivery-modal-layer"><section className="delivery-modal" role="dialog" aria-modal="true"><header><div><ShieldCheck /><strong>{workflow.type === "delivery" ? "Delivery verification" : "Return inspection"}</strong></div><button type="button" onClick={() => { setOtpSent(false); setWorkflow(null); }}>×</button></header>
-        {workflow.type === "delivery" ? <><p>Upload clear front and back images for every returnable item before requesting the buyer’s WhatsApp OTP.</p><label><FileImage /> Front image<input type="file" accept="image/*" capture="environment" onChange={(event) => setFrontImage(event.target.files?.[0] || null)} /></label><label><FileImage /> Back image<input type="file" accept="image/*" capture="environment" onChange={(event) => setBackImage(event.target.files?.[0] || null)} /></label></> : <><p>Compare the delivery evidence and buyer-submitted front/back images before approving pickup.</p>{[["matches_images", "Product matches both evidence sets"], ["seal_and_tags_present", "Required seal and price tags are present"], ["undamaged", "Product is undamaged"]].map(([name, label]) => <label className="inspection-check" key={name}><input type="checkbox" checked={checks[name]} onChange={(event) => setChecks((current) => ({ ...current, [name]: event.target.checked }))} /> {label}</label>)}</>}
-        <button type="button" className="secondary-cta" onClick={beginOtp} disabled={busy || (workflow.type === "delivery" ? !frontImage || !backImage : !Object.values(checks).every(Boolean))}><Upload size={15} /> Send WhatsApp OTP</button>{otpSent && <p className="delivery-otp-status" role="status">OTP sent. Enter the buyer’s six-digit code below.</p>}<input value={otp} onChange={(event) => setOtp(event.target.value)} inputMode="numeric" placeholder="Buyer-provided OTP" aria-label="Buyer OTP" />
+        {workflow.type === "delivery" ? <><p>Upload clear front and back images for every returnable item before requesting the buyer’s OTP.</p><label><FileImage /> Front image<input type="file" accept="image/*" capture="environment" onChange={(event) => setFrontImage(event.target.files?.[0] || null)} /></label><label><FileImage /> Back image<input type="file" accept="image/*" capture="environment" onChange={(event) => setBackImage(event.target.files?.[0] || null)} /></label></> : <><p>Compare the delivery evidence and buyer-submitted front/back images before approving pickup.</p>{[["matches_images", "Product matches both evidence sets"], ["seal_and_tags_present", "Required seal and price tags are present"], ["undamaged", "Product is undamaged"]].map(([name, label]) => <label className="inspection-check" key={name}><input type="checkbox" checked={checks[name]} onChange={(event) => setChecks((current) => ({ ...current, [name]: event.target.checked }))} /> {label}</label>)}</>}
+        <fieldset className="otp-channel-choice" style={{ display: "flex", gap: "12px", border: "none", padding: 0, margin: 0 }}>
+          <legend style={{ fontSize: "12px", fontWeight: 600, marginBottom: "4px" }}>Send OTP via</legend>
+          <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "13px" }}><input type="radio" name="otp-channel" value="whatsapp" checked={otpChannel === "whatsapp"} onChange={() => setOtpChannel("whatsapp")} /> WhatsApp</label>
+          <label style={{ display: "flex", alignItems: "center", gap: "4px", fontSize: "13px" }}><input type="radio" name="otp-channel" value="email" checked={otpChannel === "email"} onChange={() => setOtpChannel("email")} /> Email</label>
+        </fieldset>
+        <button type="button" className="secondary-cta" onClick={beginOtp} disabled={busy || (workflow.type === "delivery" ? !frontImage || !backImage : !Object.values(checks).every(Boolean))}><Upload size={15} /> Send {otpChannel === "email" ? "Email" : "WhatsApp"} OTP</button>{otpSent && <p className="delivery-otp-status" role="status">OTP sent. Enter the buyer’s six-digit code below.</p>}<input value={otp} onChange={(event) => setOtp(event.target.value)} inputMode="numeric" placeholder="Buyer-provided OTP" aria-label="Buyer OTP" />
         <button type="button" className="primary-cta" onClick={workflow.type === "delivery" ? completeDelivery : completeReturn} disabled={busy || !otp || (workflow.type === "delivery" ? !frontImage || !backImage : !Object.values(checks).every(Boolean))}>{busy ? <LoaderCircle className="spin" /> : <ShieldCheck />} {workflow.type === "delivery" ? "Complete delivery" : "Approve return"}</button>
       </section></div>}
     </main>

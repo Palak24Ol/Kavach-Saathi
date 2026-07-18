@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
-import secrets
 from datetime import UTC, datetime
 from typing import Any
 
@@ -102,13 +99,6 @@ class TwilioIntegrationClient:
         verification = client.verify.v2.services(service_sid).verifications.create(to=phone, channel="whatsapp")
         return verification.sid
 
-    def _otp_key(self, purpose: str, reference_id: str) -> str:
-        return f"otp:{purpose}:{reference_id}"
-
-    def _otp_digest(self, purpose: str, reference_id: str, phone: str, code: str) -> str:
-        message = f"{purpose}:{reference_id}:{normalize_phone_number(phone)}:{code}".encode()
-        return hmac.new(self.settings.jwt_secret.encode(), message, hashlib.sha256).hexdigest()
-
     def send_programmable_whatsapp_otp(self, phone: str, *, purpose: str, reference_id: str) -> str:
         """Send a test OTP through the configured WhatsApp Sandbox sender.
 
@@ -118,19 +108,13 @@ class TwilioIntegrationClient:
         """
         if not self.is_configured or not self.settings.twilio_whatsapp_from:
             raise RuntimeError("Twilio WhatsApp Sandbox is not configured")
+        from kavach_saathi.providers import otp_core
         from kavach_saathi.redis_client import get_redis
 
         normalized = normalize_phone_number(phone)
-        code = f"{secrets.randbelow(900000) + 100000:06d}"
-        key = self._otp_key(purpose, reference_id)
-        payload = {
-            "phone": normalized,
-            "digest": self._otp_digest(purpose, reference_id, normalized, code),
-            "attempts": 0,
-        }
         redis = get_redis()
+        code = otp_core.store_otp(redis, self.settings, purpose=purpose, reference_id=reference_id, contact=normalized)
         try:
-            redis.setex(key, self.settings.otp_expiry_seconds, json.dumps(payload))
             message = self._client().messages.create(
                 from_=self.settings.twilio_whatsapp_from,
                 to=f"whatsapp:{normalized}",
@@ -139,7 +123,7 @@ class TwilioIntegrationClient:
             return message.sid
         except Exception:
             try:
-                redis.delete(key)
+                redis.delete(otp_core.otp_key(purpose, reference_id))
             except Exception:
                 pass
             raise
@@ -152,30 +136,14 @@ class TwilioIntegrationClient:
         purpose: str,
         reference_id: str,
     ) -> bool:
-        if self.settings.allow_demo_otp and self.settings.otp_demo_code and code == self.settings.otp_demo_code:
-            return True
+        # `phone` is unused now that verification reads the contact stored at
+        # send time (see otp_core.verify_otp) -- kept in the signature so
+        # existing callers (delivery_api.py) and tests don't need to change.
+        del phone
+        from kavach_saathi.providers import otp_core
         from kavach_saathi.redis_client import get_redis
 
-        redis = get_redis()
-        key = self._otp_key(purpose, reference_id)
-        try:
-            raw = redis.get(key)
-            if not raw:
-                return False
-            payload = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
-            if payload.get("phone") != normalize_phone_number(phone) or int(payload.get("attempts", 0)) >= 5:
-                return False
-            expected = self._otp_digest(purpose, reference_id, phone, code.strip())
-            if hmac.compare_digest(str(payload.get("digest", "")), expected):
-                redis.delete(key)
-                return True
-            payload["attempts"] = int(payload.get("attempts", 0)) + 1
-            ttl = redis.ttl(key)
-            if ttl and ttl > 0:
-                redis.setex(key, ttl, json.dumps(payload))
-            return False
-        except Exception:
-            return False
+        return otp_core.verify_otp(get_redis(), self.settings, purpose=purpose, reference_id=reference_id, code=code)
 
     def send_whatsapp_content(self, phone: str, content_sid: str, variables: dict[str, str]) -> str:
         if not self.is_configured or not self.settings.twilio_whatsapp_from:

@@ -123,6 +123,7 @@ class AuthUser(BaseModel):
     email: str | None = None
     phone: str | None = None
     preferred_language: str
+    email_verified: bool = False
 
 
 class TokenResponse(BaseModel):
@@ -130,6 +131,14 @@ class TokenResponse(BaseModel):
     refresh_token: str
     token_type: Literal["bearer"] = "bearer"
     user: AuthUser
+    # Whether a signup verification OTP was actually emailed -- false when the
+    # signup didn't include an email, or SMTP isn't configured (honest degrade,
+    # doesn't block account creation).
+    email_verification_sent: bool = False
+
+
+class EmailOtpVerifyRequest(BaseModel):
+    otp: str = Field(min_length=4, max_length=10)
 
 
 class SellerSpecification(BaseModel):

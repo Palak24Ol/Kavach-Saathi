@@ -133,6 +133,16 @@ class Settings(BaseSettings):
     otp_resend_cooldown_seconds: int = Field(default=60, ge=15, le=300)
     otp_max_attempts: int = Field(default=3, ge=1, le=10)
 
+    # Email-OTP channel (Gmail SMTP or any SMTP provider) -- an alternative to
+    # WhatsApp OTP for signup/order-confirm/delivery/return, since a Twilio
+    # trial account only delivers WhatsApp to one verified number.
+    smtp_host: str | None = None
+    smtp_port: int = 587
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from_email: str | None = None
+    smtp_from_name: str = "Kavach Saathi"
+
     # Publicly reachable base URL for this backend (e.g. an ngrok tunnel) -- Twilio's
     # servers must be able to reach us to fetch call instructions and post back the
     # buyer's recorded response; localhost is not reachable from Twilio's cloud.

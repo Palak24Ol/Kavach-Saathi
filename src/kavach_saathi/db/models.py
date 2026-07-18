@@ -29,6 +29,7 @@ class User(Base):
     city: Mapped[str | None] = mapped_column(String(120), nullable=True)
     measurements_cm: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     trusted_returner: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    email_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
     seller_profile: Mapped[SellerProfile | None] = relationship(back_populates="user", uselist=False)
@@ -337,7 +338,7 @@ class ReturnRecord(Base):
     evidence_checks: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     pickup_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     pickup_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
-    refund_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    refund_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
     refund_masked_details: Mapped[str | None] = mapped_column(String(255), nullable=True)
     replacement_order_id: Mapped[str | None] = mapped_column(String(32), ForeignKey("orders.id"), nullable=True)
     status_timeline: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)

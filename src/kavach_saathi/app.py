@@ -41,6 +41,7 @@ from kavach_saathi.models import (
     AuthUser,
     ChatConversationCreate,
     ChatMessageSend,
+    EmailOtpVerifyRequest,
     HealthResponse,
     ListingAnalyzeRequest,
     LoginRequest,
@@ -61,6 +62,8 @@ from kavach_saathi.models import (
 from kavach_saathi.operational import operational_middleware, request_metrics
 from kavach_saathi.orchestration.service import RunNotFoundError
 from kavach_saathi.order_status import OrderStatus
+from kavach_saathi.providers import otp_core
+from kavach_saathi.providers.email_integration import EmailIntegrationClient
 from kavach_saathi.providers.twilio_integration import TwilioIntegrationClient
 from kavach_saathi.redis_client import get_redis
 from kavach_saathi.repository import DataNotFoundError
@@ -238,6 +241,7 @@ def create_app() -> FastAPI:
             email=user.email,
             phone=user.phone,
             preferred_language=user.preferred_language,
+            email_verified=user.email_verified,
         )
 
     @app.post(f"{prefix}/auth/signup", response_model=TokenResponse, status_code=201)
@@ -258,7 +262,60 @@ def create_app() -> FastAPI:
         )
         access = create_access_token(user, cfg)
         refresh = create_refresh_token(user, session, cfg)
-        return TokenResponse(access_token=access, refresh_token=refresh, user=_auth_user(user))
+
+        email_verification_sent = False
+        if user.email:
+            try:
+                EmailIntegrationClient(cfg).send_otp_email(user.email, purpose="signup", reference_id=user.id)
+                email_verification_sent = True
+            except RuntimeError:
+                # Honest degrade: SMTP not configured or delivery failed --
+                # don't block account creation on an optional email feature.
+                logger.warning("Could not send signup verification email for user %s", user.id, exc_info=True)
+
+        return TokenResponse(
+            access_token=access,
+            refresh_token=refresh,
+            user=_auth_user(user),
+            email_verification_sent=email_verification_sent,
+        )
+
+    @app.post(f"{prefix}/auth/verify-email")
+    async def auth_verify_email(
+        payload: EmailOtpVerifyRequest,
+        user: Annotated[User, Depends(get_current_user)],
+        cfg: Settings = Depends(get_settings),
+        session: Session = Depends(get_session),
+    ) -> AuthUser:
+        if not otp_core.verify_otp(get_redis(), cfg, purpose="signup", reference_id=user.id, code=payload.otp):
+            raise HTTPException(status_code=400, detail="Incorrect or expired verification code")
+        db_user = session.get(User, user.id)
+        db_user.email_verified = True
+        session.flush()
+        return _auth_user(db_user)
+
+    @app.post(f"{prefix}/auth/verify-email/resend")
+    async def auth_verify_email_resend(
+        user: Annotated[User, Depends(get_current_user)],
+        cfg: Settings = Depends(get_settings),
+    ) -> dict:
+        if not user.email:
+            raise HTTPException(status_code=400, detail="This account has no email on file")
+        redis = get_redis()
+        existing_ttl = redis.ttl(otp_core.otp_key("signup", user.id))
+        cooldown = cfg.otp_resend_cooldown_seconds
+        if existing_ttl and existing_ttl > 0:
+            time_since_last_send = cfg.otp_expiry_seconds - existing_ttl
+            if time_since_last_send < cooldown:
+                wait_sec = cooldown - time_since_last_send
+                raise HTTPException(
+                    status_code=429, detail=f"Please wait {wait_sec} seconds before requesting a new OTP"
+                )
+        try:
+            EmailIntegrationClient(cfg).send_otp_email(user.email, purpose="signup", reference_id=user.id)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        return {"message": "Verification code resent"}
 
     @app.post(f"{prefix}/auth/login", response_model=TokenResponse)
     async def auth_login(
