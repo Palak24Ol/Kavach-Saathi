@@ -121,7 +121,10 @@ flowchart LR
 ### System design and data flow
 
 ```mermaid
+%%{init: {"themeVariables": {"background": "#ffffff", "edgeLabelBackground": "#ffffff"}}}%%
 flowchart TB
+    subgraph Canvas[" "]
+    direction TB
     subgraph Clients[Client layer]
         Buyer[Buyer web app]
         Seller[Seller portal]
@@ -262,6 +265,8 @@ flowchart TB
     Backup --> Restore
     Health --> Observe
     Worker --> Observe
+    end
+    style Canvas fill:#ffffff,stroke:#ffffff
 
     classDef client fill:#eaf2ff,stroke:#285ea8,color:#102a43;
     classDef service fill:#fce8f1,stroke:#8b1d54,color:#4a1230;
