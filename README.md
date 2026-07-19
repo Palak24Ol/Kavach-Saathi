@@ -121,7 +121,7 @@ flowchart LR
 ### System design and data flow
 
 ```mermaid
-%%{init: {"themeVariables": {"background": "#ffffff", "edgeLabelBackground": "#ffffff"}}}%%
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#1a1a1a", "primaryBorderColor": "#4a4a4a", "lineColor": "#6b6b6b", "clusterBkg": "#ffffff", "clusterBorder": "#8b8b8b", "edgeLabelBackground": "#ffffff", "titleColor": "#1a1a1a"}}}%%
 flowchart TB
     subgraph Canvas[" "]
     direction TB
