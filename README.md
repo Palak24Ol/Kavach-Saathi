@@ -1,5 +1,7 @@
 # Kavach Saathi
 
+**Live deployment:** [https://shop.65-2-86-148.sslip.io](https://shop.65-2-86-148.sslip.io)
+
 Kavach Saathi is an evidence-first marketplace safety platform. A Next.js storefront
 and FastAPI backend coordinate eight AI agents across the seller, buyer, delivery, and
 return journeys. Every automated decision carries evidence and a confidence score;
@@ -74,40 +76,157 @@ scripts/                Seed, backup, restore, and local-development utilities
 
 ## Run locally
 
-The supported local path uses Docker Desktop. The manual path requires Python 3.11+
-(the production image currently uses Python 3.13), Node.js 20+, PostgreSQL, and Redis.
+### Prerequisites
 
-```bash
-cp .env.example .env
-docker compose up --build
-```
+The recommended setup uses [Git](https://git-scm.com/) and
+[Docker Desktop](https://www.docker.com/products/docker-desktop/) with Docker Compose.
+Allow at least 20 GB of free disk space: the first backend build installs the CPU
+PyTorch and Hugging Face model stack and can take several minutes.
 
-Open:
+External API keys are optional for local exploration. With the defaults from
+`.env.example`, the application starts in deterministic demo mode and reports
+unconfigured providers honestly.
+
+### Recommended: complete Docker setup
+
+1. Clone the repository and enter it:
+
+   ```bash
+   git clone https://github.com/manya1632/Kavach-Saathi.git
+   cd Kavach-Saathi
+   ```
+
+2. Create the local environment file.
+
+   macOS/Linux:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+   Windows PowerShell:
+
+   ```powershell
+   Copy-Item .env.example .env
+   ```
+
+   The checked-in defaults already point at local PostgreSQL and Redis. Add provider
+   credentials to `.env` only for integrations you want to exercise, such as Gemini,
+   Groq, Google Maps, Pinecone, Sarvam, Twilio, or Razorpay. Never commit `.env`.
+
+3. Build the application images and start the databases:
+
+   ```bash
+   docker compose build
+   docker compose up -d postgres redis
+   ```
+
+4. Apply the schema and load the synthetic demonstration catalogue:
+
+   ```bash
+   docker compose run --rm backend alembic upgrade head
+   docker compose run --rm backend python scripts/generate_seed_data.py
+   ```
+
+   The seed command resets the local application tables. Run it on first setup or when
+   you intentionally want fresh demo data, not after creating local records you need to
+   keep.
+
+5. Start the API, event worker, and web application:
+
+   ```bash
+   docker compose up -d
+   docker compose ps
+   ```
+
+6. Confirm that the backend is ready:
+
+   ```bash
+   curl http://localhost:8000/health
+   ```
+
+   PowerShell alternative:
+
+   ```powershell
+   Invoke-RestMethod http://localhost:8000/health
+   ```
+
+### Local URLs
 
 - Buyer storefront: <http://localhost:3000>
 - Seller portal: <http://localhost:3000/seller>
 - Delivery portal: <http://localhost:3000/delivery>
 - Admin console: <http://localhost:3000/admin>
 - API documentation: <http://localhost:8000/docs>
+- Health endpoint: <http://localhost:8000/health>
 
-For separate development processes:
+The seed script gives every seeded account the password `KavachDemo@2026`. Useful
+accounts include:
+
+| Role | Email |
+|---|---|
+| Buyer | `b-001@buyer.kavachsaathi.test` |
+| Seller | `s-001@seller.kavachsaathi.test` |
+| Admin | `admin@kavachsaathi.test` |
+
+Create a delivery-person account from the storefront signup form; successful login or
+signup redirects that role to `/delivery`.
+
+### Common Docker commands
 
 ```bash
-cp .env.example .env
+# Follow application logs
+docker compose logs -f backend worker frontend
+
+# Stop containers while keeping database/model-cache volumes
+docker compose down
+
+# Rebuild after dependency or Dockerfile changes
+docker compose up -d --build
+
+# Apply new migrations
+docker compose run --rm backend alembic upgrade head
+```
+
+On Windows, `scripts/refresh_local.ps1` can copy source changes into existing
+containers, apply migrations, restart the application services, and wait for health:
+
+```powershell
+.\scripts\refresh_local.ps1
+```
+
+### Alternative: run application processes on the host
+
+This path requires Python 3.11+, [uv](https://docs.astral.sh/uv/), Node.js 20+,
+PostgreSQL, and Redis. You can use the Compose databases while running FastAPI and
+Next.js directly:
+
+```bash
+docker compose up -d postgres redis
 uv sync --extra dev
-uv run alembic upgrade head
 npm --prefix web ci
+uv run alembic upgrade head
+uv run python scripts/generate_seed_data.py
+```
+
+Then run these in separate terminals:
+
+```bash
+# Terminal 1: FastAPI; demo-mode event consumers run in this process
 uv run uvicorn kavach_saathi.app:app --reload --port 8000
+
+# Terminal 2: Next.js
 npm --prefix web run dev
 ```
 
-Validation commands:
+### Run checks
 
 ```bash
 uv run pytest
 uv run ruff check .
 npm --prefix web run lint
 npm --prefix web run build
+npx --prefix web playwright install chromium   # first browser-test run only
 npm --prefix web run e2e
 ```
 
