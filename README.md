@@ -76,7 +76,7 @@ flowchart LR
 
     subgraph SellerJourney[Seller listing and fulfilment journey]
         direction TB
-        SellerHome --> KYC[Seller identity and KYC]
+        SellerHome --> KYC[Seller identity]
         KYC --> Upload[Upload product and label images]
         Upload --> CatalogueAgent[Agent 1: catalogue truth]
         Upload --> SpecAgent[Agent 2: specification extraction]
