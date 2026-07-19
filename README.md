@@ -111,8 +111,7 @@ npm --prefix web run build
 npm --prefix web run e2e
 ```
 
-See [SETUP.md](SETUP.md), [RUNBOOK.md](RUNBOOK.md), and [DEPLOYMENT.md](DEPLOYMENT.md)
-for environment configuration, demonstrations, operations, and deployment details.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for production configuration and deployment details.
 
 ## Open Source Attributions
 
@@ -201,13 +200,12 @@ particular, Redis licensing depends on the resolved 7.x image release.
 
 ### Project-specific attribution
 
-- The DIGIPIN implementation is based on the Department of Posts reference algorithm;
-  see [NOTICE](NOTICE).
+- The DIGIPIN implementation is based on the Department of Posts reference algorithm.
 - The storefront journey was informed by the reference recorded in
   [web/ATTRIBUTION.md](web/ATTRIBUTION.md). The implementation and synthetic assets in
   this repository were created independently.
-- Model checkpoints and external API services have their own model cards and service
-  terms. See [THIRD_PARTY.md](THIRD_PARTY.md) for those runtime-specific notes.
+- Model checkpoints and external API services retain their own model-card and service
+  terms.
 
 All third-party components remain subject to their respective licenses. This table is
 an engineering inventory, not legal advice and not a replacement for upstream license
