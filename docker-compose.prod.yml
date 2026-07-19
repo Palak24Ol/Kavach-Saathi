@@ -1,0 +1,126 @@
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kavach
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: kavach_saathi
+    volumes:
+      - kavach_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kavach -d kavach_saathi"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - kavach_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    logging: *default-logging
+
+  backend:
+    image: kavach-saathi-backend
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://kavach:${POSTGRES_PASSWORD}@postgres:5432/kavach_saathi
+      REDIS_URL: redis://redis:6379/0
+      FRONTEND_ORIGIN: https://${SHOP_HOST:?SHOP_HOST is required}
+      PUBLIC_BASE_URL: https://${API_HOST:?API_HOST is required}
+      MEDIA_STORAGE_BACKEND: s3
+      PYTHONPATH: /app/src
+      RUN_EVENT_CONSUMERS_IN_WEB: "false"
+      RUN_WORKFLOWS_IN_WEB: "false"
+      REQUIRE_WORKER_READY: "true"
+    expose:
+      - "8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./assets:/app/assets
+      - kavach_hf_cache:/root/.cache/huggingface
+    logging: *default-logging
+
+  worker:
+    image: kavach-saathi-backend
+    restart: unless-stopped
+    command: ["python", "-m", "kavach_saathi.event_worker"]
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://kavach:${POSTGRES_PASSWORD}@postgres:5432/kavach_saathi
+      REDIS_URL: redis://redis:6379/0
+      MEDIA_STORAGE_BACKEND: s3
+      PYTHONPATH: /app/src
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      TOKENIZERS_PARALLELISM: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./assets:/app/assets
+      - kavach_hf_cache:/root/.cache/huggingface
+    logging: *default-logging
+
+  frontend:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    environment:
+      AGENT_API_ORIGIN: http://backend:8000
+    expose:
+      - "3000"
+    depends_on:
+      - backend
+    logging: *default-logging
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      SHOP_HOST: ${SHOP_HOST:?SHOP_HOST is required}
+      API_HOST: ${API_HOST:?API_HOST is required}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+      - backend
+    logging: *default-logging
+
+volumes:
+  kavach_postgres_data:
+  kavach_redis_data:
+  kavach_hf_cache:
+  caddy_data:
+  caddy_config:
