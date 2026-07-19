@@ -45,8 +45,10 @@ flows remain connected to the same authoritative database and evidence model.
 ### End-to-end website journey
 
 ```mermaid
-%%{init: {"themeVariables": {"background": "#ffffff", "clusterBkg": "#ffffff"}}}%%
+%%{init: {"theme": "base", "themeVariables": {"background": "#ffffff", "primaryColor": "#ffffff", "primaryTextColor": "#1a1a1a", "primaryBorderColor": "#4a4a4a", "lineColor": "#6b6b6b", "clusterBkg": "#ffffff", "clusterBorder": "#8b8b8b", "edgeLabelBackground": "#ffffff", "titleColor": "#1a1a1a"}}}%%
 flowchart LR
+    subgraph Canvas[" "]
+    direction LR
     Visitor([Visitor]) --> Auth{Authentication}
     Auth -->|Buyer| BuyerHome[Buyer storefront /]
     Auth -->|Seller| SellerHome[Seller portal /seller]
@@ -103,6 +105,8 @@ flowchart LR
         AdminHome --> Audit[Agent evidence and audit logs]
         AdminHome --> Support[Support and escalations]
     end
+    end
+    style Canvas fill:#ffffff,stroke:#ffffff
 
     classDef actor fill:#eaf2ff,stroke:#285ea8,color:#102a43,stroke-width:1.5px;
     classDef portal fill:#fce8f1,stroke:#8b1d54,color:#4a1230,stroke-width:1.5px;
